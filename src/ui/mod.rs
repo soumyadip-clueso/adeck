@@ -299,6 +299,14 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return true;
     }
+    // ⌘F: the page's search field, or the command palette on a page without one.
+    if ev.is_command('f') && !ev.mods.shift {
+        s.keys_help = false;
+        if s.palette.is_none() && !focus_search(s) {
+            palette::open(s);
+        }
+        return true;
+    }
     if s.palette.is_some() {
         return false;
     }

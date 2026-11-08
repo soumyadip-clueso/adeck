@@ -18,7 +18,7 @@ pub const HEIGHT: f32 = 32.0;
 /// A compact chip's width, so the footer knows how many fit.
 const CHIP_W: f32 = 236.0;
 /// Room the summary on the left keeps before chips take over.
-const SUMMARY_W: f32 = 150.0;
+const SUMMARY_W: f32 = 230.0;
 /// The "+N more" button's width.
 const MORE_W: f32 = 76.0;
 
@@ -48,6 +48,11 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .fill(px::CASE)
         .border_sides([1.0, 0.0, 0.0, 0.0], px::LINE)
         .child(lead.key("status-summary").cursor(rune::Cursor::Pointer).help("Every job · click for Activity").on_press(|s: &mut App| s.activity_open ^= true))
+        .child(if s.jobs.any_finished() {
+            px::key_sm("Clear all", false).key("status-clear").help("Clear every finished job").on_press(|s: &mut App| s.jobs.clear_finished())
+        } else {
+            el().size(0.0, 22.0)
+        })
         .child(spacer())
         .child(chips)
 }

@@ -18,7 +18,7 @@ const GENERAL: Section = (
         ("⌘W", "Close the tab"),
         ("⌘⇧E", "Share the tab as a page"),
         ("⌘⇧S", "Screenshot the tab"),
-        ("/", "Search this tab"),
+        ("⌘F  /", "Search this tab"),
         ("?", "This sheet"),
     ],
 );

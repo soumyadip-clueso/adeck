@@ -703,6 +703,37 @@ mod tests {
         assert!(bad.is_empty(), "the page shifted:\n{}", bad.join("\n"));
     }
 
+    /// ⌘F puts the cursor in the page's search, so what you type next filters; on a page with
+    /// no search it opens the command palette.
+    #[test]
+    fn command_f_searches() {
+        let cmd_f = || rune::KeyEvent { key: rune::Key::Command('f'), mods: rune::Mods { cmd: true, logo: true, ..Default::default() } };
+        for scene in [board as Scene, run, shared, pads] {
+            let mut rt = rt(scene);
+            rt.on_key = Some(crate::ui::on_key);
+            // Even after clicking something else on the page first.
+            if let Some((x, y)) = rt.find("play") {
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+            }
+            rt.key(cmd_f());
+            for _ in 0..5 {
+                rt.frame(1.0 / 60.0);
+            }
+            rt.key(rune::KeyEvent { key: rune::Key::Text("w".into()), mods: rune::Mods::default() });
+            rt.frame(1.0 / 60.0);
+            let t = rt.state.current().expect("a tab");
+            assert_eq!(t.filter.text, "w", "{:?}: typing after ⌘F didn't reach the search", t.spec.kind);
+        }
+        let mut rt = rt(single);
+        rt.on_key = Some(crate::ui::on_key);
+        rt.key(cmd_f());
+        for _ in 0..3 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert!(rt.state.palette.is_some(), "⌘F on a page with no search should open the palette");
+    }
+
     #[test]
     fn space_plays_whatever_was_clicked_last() {
         let space = || rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() };
