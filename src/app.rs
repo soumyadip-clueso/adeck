@@ -1584,7 +1584,12 @@ impl App {
             }
         };
         let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let page = serde_json::json!({"title": title, "note": t.spec.note, "created": created, "layout": layout, "labels": labels, "groups": groups});
+        let kind = match (t.board(), layout) {
+            (Some(_), "pads") => "pads",
+            (Some(_), _) => "board",
+            _ => "compare",
+        };
+        let page = serde_json::json!({"title": title, "kind": kind, "note": t.spec.note, "created": created, "layout": layout, "labels": labels, "groups": groups});
         Some(crate::share::Export { title, page, files })
     }
 
