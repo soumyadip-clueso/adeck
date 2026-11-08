@@ -1781,7 +1781,8 @@ impl App {
         if self.mixer.is_playing() || self.mixer.is_loading() {
             self.sync_videos(false);
             self.follow_playhead();
-            tx.wake_after(std::time::Duration::from_millis(33));
+            // 60 fps while sound plays, so the playhead glides; nothing at rest.
+            tx.wake_after(std::time::Duration::from_millis(16));
             changed = true;
         }
         if self.calls.is_some()

@@ -44,6 +44,10 @@ struct Shared {
     level: AtomicU32,
     /// Counts audio callbacks, so the UI can tell a stream that silently stopped running.
     beat: AtomicU64,
+    /// When `pos` was last stored, in nanoseconds since `base`, so the UI can move the
+    /// playhead smoothly between audio buffers instead of in buffer-sized jumps.
+    stamp: AtomicU64,
+    base: std::time::Instant,
 }
 
 /// What the UI holds.
@@ -91,6 +95,8 @@ impl Default for Mixer {
                 ended: AtomicBool::new(false),
                 level: AtomicU32::new(0),
                 beat: AtomicU64::new(0),
+                stamp: AtomicU64::new(0),
+                base: std::time::Instant::now(),
             }),
             rate: 48_000,
             opening: None,
@@ -249,7 +255,13 @@ impl Mixer {
                 self.seek_frames(0);
             }
             self.shared.playing.store(true, Ordering::Release);
+            self.shared.stamp.store(self.shared.base.elapsed().as_nanos() as u64, Ordering::Release);
             self.send(Cmd::Play);
+        }
+        // A press runs after this frame's poll, so nothing has scheduled the next frame yet:
+        // wake the loop now or the playhead sits still until something else redraws.
+        if let Some(w) = &self.waker {
+            w();
         }
     }
 
@@ -275,7 +287,15 @@ impl Mixer {
         if let Some(p) = self.pending_seek {
             return p;
         }
-        self.position() as f64 / f64::from(self.rate)
+        let at = self.position() as f64 / f64::from(self.rate);
+        if !self.is_playing() {
+            return at;
+        }
+        // Between buffers, carry on at real time, never past one buffer's worth.
+        let since = self.shared.base.elapsed().as_nanos() as u64;
+        let ahead = since.saturating_sub(self.shared.stamp.load(Ordering::Acquire)) as f64 / 1e9;
+        let end = self.frames.saturating_sub(1) as f64 / f64::from(self.rate);
+        (at + ahead.min(0.05)).min(end.max(at))
     }
 
     pub fn total_secs(&self) -> f64 {
@@ -529,6 +549,7 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
             }
         }
         sh.pos.store(s.pos, Ordering::Release);
+        sh.stamp.store(sh.base.elapsed().as_nanos() as u64, Ordering::Release);
         sh.level.store(loudest.to_bits(), Ordering::Release);
     };
     let err = move |e: cpal::Error| {

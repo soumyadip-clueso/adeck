@@ -576,6 +576,36 @@ mod tests {
     }
 
     #[test]
+    fn space_plays_whatever_was_clicked_last() {
+        let space = || rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() };
+        for (scene, keys) in [
+            (compare as fn(&mut App), &["play", "hear-1", "member-1", "blind", "match", "scrubber", "wave-0", "pane-tab-meta", "zoom-in", "volume", "add-file", "note-toggle"][..]),
+            (board as fn(&mut App), &["play", "tile-whoosh-soft-1", "blind", "zoom", "replay", "loop-toggle", "decide-keep"][..]),
+            (single as fn(&mut App), &["play", "score-2", "wave", "pane-tab-earshot"][..]),
+        ] {
+            for key in keys {
+                let mut rt = rt(scene);
+                rt.on_key = Some(crate::ui::on_key);
+                rt.set_full_keyboard_access(true);
+                for _ in 0..20 {
+                    rt.frame(1.0 / 60.0);
+                }
+                let Some((x, y)) = rt.find(key) else { panic!("no {key}") };
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+                for _ in 0..5 {
+                    rt.frame(1.0 / 60.0);
+                }
+                let before = rt.state.mixer.wants_play() || rt.state.mixer.is_playing();
+                rt.key(space());
+                rt.frame(1.0 / 60.0);
+                let after = rt.state.mixer.wants_play() || rt.state.mixer.is_playing();
+                assert_ne!(before, after, "Space after clicking {key} didn't toggle play");
+            }
+        }
+    }
+
+    #[test]
     fn a_toast_closes_on_a_click() {
         let mut rt = rt(single);
         rt.state.toast = Some(("Saved score".into(), false));
