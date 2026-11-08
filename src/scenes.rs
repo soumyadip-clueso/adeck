@@ -475,6 +475,23 @@ mod tests {
     }
 
     #[test]
+    fn the_sheet_slides_in_instead_of_popping() {
+        let mut rt = rt(pads);
+        let ([_, _, w0, _], _) = rt.presented("sheet-slot").expect("slot while closed");
+        assert!(w0 < 1.0, "closed: {w0}");
+        rt.state.toggle_sheet();
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        rt.frame(1.0 / 60.0);
+        let ([_, _, mid, _], _) = rt.presented("sheet-slot").unwrap();
+        for _ in 0..60 {
+            rt.frame(1.0 / 60.0);
+        }
+        let ([_, _, end, _], _) = rt.presented("sheet-slot").unwrap();
+        assert!(mid > 0.0 && mid < end - 20.0, "mid-slide {mid} vs open {end}");
+    }
+
+    #[test]
     fn dragging_across_the_waveform_scrubs() {
         let mut rt = rt(single);
         let (x, y) = rt.find("wave").expect("wave");

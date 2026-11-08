@@ -28,12 +28,16 @@ fn sheet_w(s: &App, width: f32) -> f32 {
 
 /// `main` with the sheet beside it (or instead of it, when narrow).
 pub fn wrap(s: &App, t: &Tab, main: El, width: f32, k: &Kit) -> El {
-    if !is_open(t) {
-        return main;
-    }
-    let Some(g) = t.focused() else { return main };
-    let c = &k.c;
     let narrow = width < NARROW;
+    // The same row whether the sheet is open or not, so opening springs the widths instead of
+    // swapping the tree.
+    let frame = |main: El, slot: El, main_w: f32| {
+        row().key("with-sheet").w_full().h_full().min_h(0.0).child(col().key("sheet-main").w(main_w).h_full().min_h(0.0).animate_layout().child(main)).child(slot)
+    };
+    let Some(g) = t.focused().filter(|_| is_open(t)) else {
+        return if narrow { main } else { frame(main, row().key("sheet-slot").w(0.0).h_full().animate_layout(), width) };
+    };
+    let c = &k.c;
     let w = if narrow { width } else { sheet_w(s, width) };
     let label = t.board_label(g, t.active);
     let close = IconButton::new(if narrow { &icons::CHEVRON_RIGHT } else { &icons::CLOSE })
@@ -52,7 +56,7 @@ pub fn wrap(s: &App, t: &Tab, main: El, width: f32, k: &Kit) -> El {
         .child(close);
     let inner = w - 28.0;
     let body = col().key("sheet-scroll").w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(col().w_full().pr(4.0).child(board::detail(s, t, g, inner, k)));
-    let mut sheet = col()
+    let sheet = col()
         .key("sheet")
         .w(w)
         .h_full()
@@ -83,6 +87,6 @@ pub fn wrap(s: &App, t: &Tab, main: El, width: f32, k: &Kit) -> El {
             }
             s.sheet_w = (d.data - d.dx).clamp(320.0, 1400.0);
         });
-    sheet = sheet.animate_layout();
-    row().key("with-sheet").w_full().h_full().min_h(0.0).child(col().w(width - w - GAP).h_full().min_h(0.0).child(main)).child(grip).child(sheet)
+    let slot = row().key("sheet-slot").w(w + GAP).h_full().min_h(0.0).animate_layout().clip_rounded(k.radius.lg).child(grip).child(sheet);
+    frame(main, slot, width - w - GAP)
 }
