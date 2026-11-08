@@ -435,7 +435,7 @@ pub fn tools() -> Vec<Value> {
         tool("get_decisions", "The user's latest keep/drop/move:<group> on each file of a board (tab_id) or of the given items.", json!({"tab_id": tab, "items": items}), &[]),
         tool(
             "get_selection",
-            "What the user pointed you at: they double-click a strip, tile or member (or press S / Send to agent) and it lands here with the tab, group, member, item id (absent while blind), the loop or zoomed range and the playhead, plus any note. Newest first. wait_for_feedback also wakes on one.",
+            "What the user pointed you at: they double-click a strip, tile or member (or press S / Send to agent) and it lands here with the tab, group, member, item id (absent while blind), the loop, shift-dragged selection or zoomed range and the playhead, plus any note. Newest first. wait_for_feedback also wakes on one.",
             json!({"limit": {"type": "integer", "description": "Default 1."}, "since": {"type": "number"}}),
             &[],
         ),

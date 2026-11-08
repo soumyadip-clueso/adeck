@@ -61,15 +61,17 @@ Or in a project's `.mcp.json`:
 | `list_runs`, `list_items`, `get_item` | Find runs and items; everything known about one item |
 | `open_single`, `open_compare`, `open_render`, `open_run` | Open a tab; each returns its `tab_id` |
 | `list_tabs`, `focus_tab`, `close_tab`, `annotate_tab` | Manage tabs (`list_tabs` is one line per tab; give a `tab_id` for its members); pin markdown on what to listen for |
-| `play`, `stop`, `set_loop` | Playback |
+| `play`, `stop`, `set_loop` | Play a tab (a group, a take, from a time), pause, loop a region or clear it |
 | `screenshot_tab` | A PNG of a tab as you see it |
-| `get_feedback`, `wait_for_feedback` | Your verdicts |
+| `get_feedback`, `wait_for_feedback` | Your scores, picks and notes; `wait_for_feedback` blocks until the next one, for a listen-generate loop |
 | `analyze` | Run earshot `describe`, `measure`, `critique` or `timeline` (cached) |
 | `open_board`, `board_upsert` | A board of groups; add or replace groups (or a diff's rows) while it's open |
 | `open_pads` | Sound pads for one-shot effects |
 | `open_diff` | Run A against run B, per group and metric |
 | `get_decisions` | Your latest keep / drop / move on each file of a board |
-| `get_selection` | What you pointed the agent at, newest first |
+| `get_selection` | What you pointed the agent at (double-click, S or Send to agent): the tab, group, take, the loop, selection or zoomed range and the playhead, newest first |
+| `share_tab` | Publish a tab as a web page and return its url (needs `[share]` in the config); reference-pack audio is never uploaded |
+| `list_shares`, `open_shared`, `unshare` | Every shared page; open the Shared tab; take a page and its audio down |
 
 Replies are compact JSON with nulls left out, and shared shapes (board groups, diff rows) are spelled out once, so the tools stay cheap in an agent's context. Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
 
