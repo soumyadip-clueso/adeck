@@ -4,6 +4,12 @@ A listening bench for generated audio, driven by your coding agent. The agent op
 
 ![A compare tab](docs/compare.png)
 
+| Board | Pads |
+|---|---|
+| ![A board of groups](docs/board.png) | ![Sound pads](docs/pads.png) |
+| **One file** | **Run vs run** |
+| ![A single-file tab](docs/single.png) | ![A diff of two runs](docs/diff.png) |
+
 Forked from [Sleeve](https://github.com/alii/sleeve), a rekordbox app by Alistair Smith. The rekordbox and USB parts are gone. Sleeve's look, its job system and its Rune UI stay.
 
 ## What a tab shows
@@ -135,7 +141,7 @@ just snap compare
 
 `just hot` uses Rune's own live editing (Dioxus's subsecond hot patching). It needs Dioxus CLI 0.7.10 (`cargo install dioxus-cli@0.7.10 --locked`; Homebrew's `dx` is a different program). A changed function body in `src/ui/` or `src/app.rs` patches into the open window in about a second and keeps the open tabs. Any other change rebuilds and relaunches, and the tabs come back. `just hot --snap-on-patch target/hot.png` renders headless and writes a PNG after every patch, for an agent checking its own UI edits.
 
-Every headless scene renders from fixture audio adeck writes itself: `adeck --snap out.png --scene single|compare|blind|run|board|pads|diff|shared|activity|palette|keys|empty`.
+Every headless scene renders from fixture audio adeck writes itself: `adeck --snap out.png --scene single|compare|blind|run|board|pads|diff|shared|activity|palette|keys|empty`. The screenshots in `docs/` are these scenes at 1280×800, scale 2.
 
 Rune is pinned to one commit in `Cargo.toml` (`rune`, `rune-kit` and `rune-theme-opencode` share it), so its changes reach adeck only when you move the pin. `just bump-rune` moves all three to the tip of Rune's default branch (or `just bump-rune <sha>`), updates the lockfile, then runs clippy, the tests and every scene; look over `target/snaps/` and commit `Cargo.toml` and `Cargo.lock`.
 
