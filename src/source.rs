@@ -58,10 +58,17 @@ pub fn resolve(cfg: &Config, id: &str) -> Result<Item, String> {
         return Item::new(id.to_owned(), path, run, false).ok_or_else(|| format!("{id} isn't audio or video adeck can play."));
     }
     let path = config::expand(Path::new(id));
+    let path = if path.is_relative() && !path.is_file() { relative(cfg, &path).unwrap_or(path) } else { path };
     if !path.is_file() {
         return Err(format!("No file at {id}."));
     }
     item_at(cfg, path)
+}
+
+/// A relative path from the agent (whose working folder adeck can't see), found under a run root
+/// or the folder holding one (`work/hill/x.wav` with root `…/repo/work`).
+fn relative(cfg: &Config, rel: &Path) -> Option<PathBuf> {
+    cfg.run_roots.iter().flat_map(|r| [Some(r.as_path()), r.parent()]).flatten().map(|d| d.join(rel)).find(|p| p.is_file())
 }
 
 /// A local file as an item, under its run or the reference pack when it's inside one.
@@ -331,5 +338,20 @@ mod tests {
         assert_eq!(runs[0].items, 2);
         assert_eq!(split_run(&cfg, "hill/run1/a/x.wav"), Some(("hill/run1".into(), "a/x.wav".into())));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relative_paths_resolve_under_a_run_root_or_its_parent() {
+        let repo = std::env::temp_dir().join(format!("adeck-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(repo.join("work/hill/run1")).unwrap();
+        std::fs::write(repo.join("work/hill/run1/x.wav"), b"").unwrap();
+        let root = repo.join("work");
+        let cfg = Config { run_roots: vec![root.clone()], ..Config::default() };
+        let want = root.join("hill/run1/x.wav").canonicalize().unwrap();
+        assert_eq!(resolve(&cfg, "hill/run1/x.wav").unwrap().path, want);
+        assert_eq!(resolve(&cfg, "work/hill/run1/x.wav").unwrap().path, want);
+        assert!(resolve(&cfg, "work/hill/run1/missing.wav").unwrap_err().starts_with("No file at"));
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
