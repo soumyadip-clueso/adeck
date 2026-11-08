@@ -16,11 +16,14 @@ use serde_json::Value;
 
 use crate::decode::{self, Pcm};
 
-/// Columns in the stored envelope; the waveform is drawn from it at any width.
-pub const ENVELOPE_COLS: usize = 4000;
+/// Columns in the stored envelope: at least 4000, and about 2.5 ms each for long files so a
+/// zoomed waveform stays sharp. The waveform is drawn from it at any width.
+pub fn envelope_cols(secs: f64) -> usize {
+    ((secs * 400.0) as usize).clamp(4000, 120_000)
+}
 pub const SPEC_ROWS: usize = 256;
 /// Bump when the analysis changes, so old caches are redone.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Analysis {
@@ -103,7 +106,7 @@ pub fn analyse_pcm(pcm: &Pcm) -> (Analysis, Vec<u8>) {
         secs,
         rate: pcm.rate,
         channels: pcm.source_channels,
-        envelope: envelope(&mono, ENVELOPE_COLS),
+        envelope: envelope(&mono, envelope_cols(secs)),
         lufs: loudness(pcm),
         peak_dbfs: if peak > 0.0 { 20.0 * f64::from(peak).log10() } else { -120.0 },
         ..Analysis::default()

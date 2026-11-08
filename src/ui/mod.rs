@@ -39,6 +39,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             TabKind::Diff => diff::build(s, t, width, k),
         },
     };
+    // Narrow windows scroll the whole page rather than squeezing the strips.
+    let body = match s.current().map(|t| t.spec.kind) {
+        Some(TabKind::Single | TabKind::Compare | TabKind::Render) if width < 620.0 => col().key("narrow-scroll").w_full().h_full().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(body),
+        _ => body,
+    };
     let footer_w = cx.layout_size("statusbar").map_or(1280.0, |z| z[0]);
     let mut root = col().w_full().h_full().fill(c.page).child(titlebar).child(col().key("body").w_full().grow(1.0).min_h(0.0).px(PAD).pt(10.0).pb(10.0).child(body));
     if let Some(a) = statusbar::activity(s, k) {
@@ -86,6 +91,7 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
             }
         })
         .on_reorder(|s: &mut App, r, _tx: &mut Tx| s.reorder(&r.id, r.to))
+        .trailing_action(new_menu(s, k, layer))
         .build_layered(k, layer);
     let mcp = row()
         .key("mcp-status")
@@ -118,6 +124,96 @@ fn short(s: &App, id: &str) -> String {
     s.entry(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |e| e.item.name.clone())
 }
 
+/// The "+" after the tabs: open a file or folder, a new compare, or a run.
+fn new_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    let plus = rune_kit::IconButton::new(&icons::PLUS)
+        .variant(rune_kit::IconButtonVariant::Ghost)
+        .label("New tab")
+        .shortcut("⌘T")
+        .on_press(|s: &mut App| {
+            if s.new_menu {
+                s.new_menu = false;
+            } else {
+                s.open_new_menu();
+            }
+        })
+        .build(k)
+        .key("new-tab");
+    let mut m = rune_kit::Menu::new("new-tab-menu")
+        .trigger(plus)
+        .open(s.new_menu)
+        .min_width(240.0)
+        .on_close(|s: &mut App| s.new_menu = false)
+        .item(rune_kit::MenuItem::new("Open file…").icon(&icons::OPEN_FILE).shortcut("⌘O").on_select_tx(|s: &mut App, tx: &mut Tx| {
+            s.new_menu = false;
+            pick_files(tx, false);
+        }))
+        .item(rune_kit::MenuItem::new("Open folder…").icon(&icons::FOLDER).description("Every file in it, as a table").on_select_tx(|s: &mut App, tx: &mut Tx| {
+            s.new_menu = false;
+            pick_folder(tx);
+        }))
+        .item(rune_kit::MenuItem::new("New compare").icon(&icons::COMPARE).description("Then add or drop files into it").on_select(|s: &mut App| {
+            s.new_menu = false;
+            s.new_compare();
+        }));
+    if !s.menu_runs.is_empty() {
+        m = m.separator().group_label("Runs");
+        for r in &s.menu_runs {
+            let run = r.clone();
+            m = m.item(rune_kit::MenuItem::new(r.clone()).icon(&icons::TABLE).on_select(move |s: &mut App| {
+                s.new_menu = false;
+                s.open(TabKind::Run, Vec::new(), Some(run.clone()), false, true, Some(run.clone()), None);
+            }));
+        }
+    }
+    m.build(k, layer)
+}
+
+/// Asks for a file. `add` puts it beside what's open (a compare); otherwise it opens in a tab.
+pub fn pick_files(tx: &mut Tx, add: bool) {
+    let mut exts: Vec<&str> = crate::item::AUDIO_EXT.to_vec();
+    exts.extend_from_slice(crate::item::VIDEO_EXT);
+    let opts = rune::FileDialogOptions { title: if add { "Add a file to compare".into() } else { "Open a file".into() }, ..Default::default() }.filter("Audio and video", &exts);
+    tx.open_file(opts, move |s: &mut App, r, _tx: &mut Tx| match r {
+        Ok(Some(p)) if add => s.add_members(vec![p.display().to_string()]),
+        Ok(Some(p)) => s.open_files(vec![p]),
+        Ok(None) => {}
+        Err(e) => s.toast = Some((format!("Couldn't open the file dialog: {e:?}"), true)),
+    });
+}
+
+fn pick_folder(tx: &mut Tx) {
+    tx.open_folder(rune::FileDialogOptions { title: "Open a folder of audio".into(), ..Default::default() }, |s: &mut App, r, _tx: &mut Tx| {
+        if let Ok(Some(p)) = r {
+            s.open_folder(p);
+        }
+    });
+}
+
+/// A dashed target for dropped files, with the same choices as the "+" menu.
+pub fn drop_zone(msg: &str, k: &Kit) -> El {
+    let c = &k.c;
+    col()
+        .key("drop-zone")
+        .w_full()
+        .grow(1.0)
+        .min_h(160.0)
+        .center()
+        .gap(10.0)
+        .radius(k.radius.lg)
+        .border(1.5, c.border_strong)
+        .fill(c.layer_01)
+        .transition(rune::Transition::opacity())
+        .child(rune::icon(&icons::DROP, 26.0).color(c.icon_faint))
+        .child(text(msg.to_owned()).font(k.ty.ui_medium).color(c.text_base))
+        .child(
+            row()
+                .gap(8.0)
+                .child(rune_kit::Button::new("Open file…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare))).build(k).key("dz-file"))
+                .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Ghost).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("dz-folder")),
+        )
+}
+
 fn empty(s: &App, k: &Kit) -> El {
     let c = &k.c;
     let hint = format!("claude mcp add --transport http adeck http://127.0.0.1:{}/mcp", s.cfg.port);
@@ -129,12 +225,28 @@ fn empty(s: &App, k: &Kit) -> El {
         .gap(8.0)
         .child(rune::icon(&icons::DROP, 26.0).color(c.icon_faint))
         .child(text("Nothing open").font(k.ty.ui_medium).color(c.text_base))
-        .child(text("Ask your LLM to open files, a compare or a run. Or drop audio and video here.").font(k.ty.small).color(c.text_muted))
+        .child(text("Ask your agent to open files, a compare or a run. Or drop audio and video here.").font(k.ty.small).color(c.text_muted))
+        .child(
+            row()
+                .gap(8.0)
+                .py(4.0)
+                .child(rune_kit::Button::new("Open file…").variant(rune_kit::ButtonVariant::Contrast).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_files(tx, false)).build(k).key("empty-file"))
+                .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("empty-folder"))
+                .child(rune_kit::Button::new("New compare").variant(rune_kit::ButtonVariant::Ghost).on_press(|s: &mut App| s.new_compare()).build(k).key("empty-compare")),
+        )
         .child(text(hint).font(rune::TextStyle { size: 11.0, ..k.ty.mono }).color(c.text_faint).selectable(true).py(6.0))
 }
 
 pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let plain = !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl;
+    if ev.is_command('t') {
+        s.open_new_menu();
+        return true;
+    }
+    if ev.is_command('o') {
+        pick_files(tx, false);
+        return true;
+    }
     if ev.is_command('w') {
         if let Some(a) = s.active {
             s.close(a);
@@ -172,6 +284,18 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.set_loop(None);
             return true;
         }
+        rune::Key::Text(ch) if matches!(ch.as_str(), "=" | "+" | "-" | "f" | "n" | "s" | "[" | "]") => {
+            match ch.as_str() {
+                "=" | "+" => s.zoom(0.5),
+                "-" => s.zoom(2.0),
+                "f" => s.zoom_fit(),
+                "n" => s.toggle_note(),
+                "s" => s.send_to_agent(None, tx),
+                "[" => s.pan(-0.5),
+                _ => s.pan(0.5),
+            }
+            return true;
+        }
         rune::Key::Enter if kind == TabKind::Compare => {
             s.pick();
             return true;
@@ -196,7 +320,6 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         _ => {}
     }
-    let _ = tx;
     false
 }
 

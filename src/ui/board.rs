@@ -4,7 +4,7 @@
 //! spectrogram zoomed to the sound, how its bands, width and tail sit against the target,
 //! what made it, the keep/drop/move decision, and the ranked rest.
 
-use rune::{Color, Drag, El, Phase, Tx, col, el, oklch, row, spacer, text};
+use rune::{Color, El, Tx, col, el, row, spacer, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
 use serde_json::{Map, Value};
 
@@ -28,9 +28,9 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     for (tone, n) in b.tally() {
         tally = tally.child(row().gap(5.0).center_y().child(chip(&Chip { text: n.to_string(), tone: tone.clone() }, k)).child(text(tone_word(&tone)).font(k.ty.small).color(c.text_muted)));
     }
-    let head = row().key("board-head").w_full().gap(14.0).center_y().flex_wrap().child(widgets::transport(s, t, k)).child(spacer()).child(tally).child(blind).child(lm).child(zoom);
+    let head = row().key("board-head").w_full().gap(14.0).center_y().flex_wrap().child(tally).child(spacer()).child(blind).child(lm).child(zoom);
 
-    let mut page = col().key("board").w_full().h_full().min_h(0.0).gap(10.0).child(head);
+    let mut page = col().key("board").w_full().h_full().min_h(0.0).gap(10.0).child(head).child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }
@@ -47,7 +47,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     if b.groups.is_empty() {
         list = list.child(text("Nothing on this board yet. The agent adds groups as results land.").font(k.ty.small).color(c.text_muted).py(20.0));
     }
-    page.child(col().key("groups-scroll").w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list)).child(widgets::note_field(t, k))
+    page.child(col().key("groups-scroll").w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
 }
 
 fn tone_word(tone: &str) -> &str {
@@ -188,9 +188,11 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
         .cursor(rune::Cursor::Pointer)
         .role("button")
         .label(format!("Play {label}"))
-        .help(if focused && pos < 9 { format!("Play {label} · {}", pos + 1) } else { format!("Play {label}") })
+        .help(if focused && pos < 9 { format!("Play {label} · {} · double-click sends it to the agent", pos + 1) } else { format!("Play {label} · double-click sends it to the agent") })
+        .motion(rune::Spring::SNAPPY)
         .child(body)
         .on_press(move |s: &mut App| s.board_play(&key, m))
+        .on_double_press_tx(move |s: &mut App, tx: &mut Tx| s.send_to_agent(Some(m), tx))
 }
 
 /// "vibe 1.05 · shape 0.51", labelled by the board's metrics where it has them.
@@ -237,7 +239,8 @@ fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     let label = t.board_label(g, t.active);
     let mut caption = row().w_full().gap(8.0).center_y().flex_wrap().child(text(format!("Hearing {label}")).font(k.ty.small_medium).color(c.text_base));
     if let Some(e) = e {
-        if let Some((a, b)) = view_of(t, e) {
+        if e.analysis.is_some() {
+            let (a, b) = s.window(t);
             let whole = e.analysis.as_ref().map_or(0.0, |x| x.secs);
             let what = if b - a < whole - 1e-3 { format!("{}–{} of {}", widgets::clock(a), widgets::clock(b), widgets::clock(whole)) } else { widgets::clock(whole) };
             caption = caption.child(text(what).font(k.ty.small.features("'tnum' 1")).color(c.text_muted));
@@ -272,8 +275,11 @@ fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     }
     d = d.child(caption);
     if let Some(e) = e {
-        let range = view_of(t, e);
-        d = d.child(strip(s, t, e, "bwave", width, 72.0, range, false, k)).child(strip(s, t, e, "bspec", width, 96.0, range, true, k));
+        d = d
+            .child(widgets::ruler(s, t, "bruler", k))
+            .child(widgets::wave_strip(s, t, Some(e), "bwave", width, 72.0, k))
+            .child(widgets::spec_strip(s, t, Some(e), "bspec", width, 96.0, k))
+            .child(widgets::grip(t, k));
     }
 
     // Analysis beside details when there's room, else stacked.
@@ -290,60 +296,6 @@ fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
         d = d.child(more(s, t, g, width, k));
     }
     d
-}
-
-/// A strip over part of a file: the waveform or spectrogram, the loop, the playhead, a click to
-/// seek and a drag to loop.
-#[allow(clippy::too_many_arguments)]
-fn strip(s: &App, t: &Tab, e: &Entry, key: &str, width: f32, height: f32, range: Option<(f64, f64)>, spec: bool, k: &Kit) -> El {
-    let ground = if spec { oklch(0.12, 0.01, 290.0) } else { widgets::screen() };
-    let mut st = el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(ground).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
-    let (Some(a), Some((lo, hi))) = (&e.analysis, range) else {
-        let why = e.failed.clone().unwrap_or_else(|| "Analysing…".into());
-        return st.child(row().w_full().h_full().center().child(text(why).font(k.ty.small).color(Color::WHITE.alpha(0.55))));
-    };
-    let span = (hi - lo).max(1e-6);
-    let zoomed_wave = !spec && t.zoom_sound && e.sound == Some((lo, hi));
-    if zoomed_wave {
-        st = st.child(el().absolute(0.0, 0.0).w_full().h_full().pixels(&e.zoom).inert());
-    } else {
-        let full_w = width * (a.secs / span) as f32;
-        let x0 = -width * (lo / span) as f32;
-        st = st.child(el().absolute(x0, 0.0).w(full_w).h_full().pixels(if spec { &e.spec } else { &e.wave }).inert());
-    }
-    let x_of = |secs: f64| ((secs - lo) / span) as f32 * width;
-    if let Some((la, lb)) = t.loop_secs {
-        let (xa, xb) = (x_of(la).clamp(0.0, width), x_of(lb).clamp(0.0, width));
-        if xb > xa {
-            st = st.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(k.c.icon_accent.alpha(0.16)).border(1.0, k.c.icon_accent.alpha(0.6)).inert());
-        }
-    }
-    let ph = widgets::playhead(s, t);
-    if ph >= lo && ph <= hi {
-        st = st.child(el().absolute(x_of(ph) - 1.0, 0.0).w(2.0).h(height).fill(Color::WHITE).inert());
-    }
-    st.on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
-        if d.w <= 0.0 {
-            return;
-        }
-        let at = lo + f64::from((d.x / d.w).clamp(0.0, 1.0)) * span;
-        let from = lo + f64::from((d.start_x / d.w).clamp(0.0, 1.0)) * span;
-        match d.phase {
-            Phase::Down => {}
-            Phase::Up if d.dx.abs() < 4.0 => {
-                s.seek_secs(at);
-                s.mixer.play();
-            }
-            _ if d.dx.abs() >= 4.0 => {
-                s.set_loop(Some((from.min(at), from.max(at))));
-                if matches!(d.phase, Phase::Up) {
-                    s.seek_secs(from.min(at));
-                    s.mixer.play();
-                }
-            }
-            _ => {}
-        }
-    })
 }
 
 /// The measurements a member is shown with: its own, else earshot's.

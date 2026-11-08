@@ -11,7 +11,6 @@ use crate::ui::widgets;
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let c = &k.c;
-    let total = widgets::tab_secs(s, t);
     let id = t.spec.items.get(t.active).cloned().unwrap_or_default();
     let e = s.entry(&id);
 
@@ -28,7 +27,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
                 .key(format!("render-member-{m}")),
         );
     }
-    let head = row().key("render-head").w_full().gap(16.0).center_y().child(widgets::transport(s, t, k)).child(spacer()).child(members);
+    let head = row().key("render-head").w_full().gap(16.0).center_y().child(spacer()).child(members);
 
     let video_w = (width * 0.55).max(320.0);
     let video_h = video_w * 9.0 / 16.0;
@@ -55,7 +54,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         }
     }
 
-    let mut page = col().key("render").w_full().h_full().min_h(0.0).gap(10.0).child(head);
+    let mut page = crate::ui::widgets::page("render", width).gap(10.0).child(head).child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }
@@ -63,8 +62,8 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         page = page.child(text(err.clone()).font(k.ty.small).color(c.danger.fg).wrap());
     }
     page = page.child(row().w_full().gap(16.0).child(stage).child(card));
-    page = page.child(cut_strip(e.and_then(|e| e.earshot.get("critique")), total, k));
-    page = page.child(widgets::wave_strip(s, t, e, "wave", width, 64.0, total, k));
+    page = page.child(cut_strip(e.and_then(|e| e.earshot.get("critique")), widgets::tab_secs(s, t), k));
+    page = page.child(widgets::wave_strip(s, t, e, "wave", width, 64.0, k));
 
     let sheet = match e.and_then(|e| e.sheet.as_ref()) {
         Some(px) => {
@@ -86,7 +85,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
             )
         }
     };
-    page.child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(sheet)).child(widgets::note_field(t, k))
+    page.child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(sheet))
 }
 
 /// The verdict, score, the metrics outside their range and the first fixes.

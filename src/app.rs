@@ -107,10 +107,19 @@ pub struct Tab {
     /// Board tabs: strips show just the sound, not the silence around it.
     pub zoom_sound: bool,
     pub move_open: bool,
+    /// The stretch of time the strips show, when zoomed in; `None` fits the whole file.
+    pub view: Option<(f64, f64)>,
+    /// Strip height, as a multiple of each strip's own.
+    pub strip_h: f32,
+    pub note_open: bool,
+    pub annotation_folded: bool,
+    /// Scrubbing: whether it was playing when the drag began.
+    pub scrub_resume: Option<bool>,
 }
 
 impl Tab {
     pub fn new(spec: TabSpec) -> Tab {
+        let spec_kind = spec.kind;
         let filter = TextEdit::new(spec.filter.clone().unwrap_or_default());
         Tab {
             spec,
@@ -129,6 +138,11 @@ impl Tab {
             details_open: false,
             zoom_sound: true,
             move_open: false,
+            view: None,
+            strip_h: 1.0,
+            note_open: spec_kind == TabKind::Run,
+            annotation_folded: false,
+            scrub_resume: None,
         }
     }
     pub fn id(&self) -> u64 {
@@ -209,6 +223,9 @@ pub struct Entry {
     /// Where the sound is, and its waveform drawn over just that stretch.
     pub sound: Option<(f64, f64)>,
     pub zoom: Pixels,
+    /// The waveform redrawn for a zoomed view, and which view (start and end ms, width).
+    pub view_px: Pixels,
+    pub view_key: std::cell::Cell<(u64, u64, u32)>,
 }
 
 impl Entry {
@@ -225,6 +242,8 @@ impl Entry {
             sheet: None,
             sound: None,
             zoom: Pixels::new(),
+            view_px: Pixels::new(),
+            view_key: std::cell::Cell::new((0, 0, 0)),
         };
         for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
             if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {
@@ -270,6 +289,9 @@ pub struct App {
     /// A message along the bottom: (text, is_error).
     pub toast: Option<(String, bool)>,
     pub mcp_status: String,
+    /// The new-tab menu, and the runs it offers (listed when it opens).
+    pub new_menu: bool,
+    pub menu_runs: Vec<String>,
     dirty: bool,
     pub headless: bool,
 }
@@ -310,6 +332,8 @@ impl App {
             activity_open: false,
             log_open: None,
             toast: cfg_error.map(|e| (e, true)),
+            new_menu: false,
+            menu_runs: Vec::new(),
             dirty: false,
             headless,
         };
@@ -822,7 +846,20 @@ impl App {
 
     /// Files dropped on the window: one opens alone, several side by side.
     pub fn open_files(&mut self, files: Vec<PathBuf>) {
-        let ids: Vec<String> = files.into_iter().filter(|p| crate::item::media_of(p).is_some()).map(|p| p.display().to_string()).collect();
+        let mut paths = Vec::new();
+        for p in files {
+            if p.is_dir() {
+                paths.extend(source::media_files(&p));
+            } else {
+                paths.push(p);
+            }
+        }
+        let ids: Vec<String> = paths.into_iter().filter(|p| crate::item::media_of(p).is_some()).map(|p| p.display().to_string()).collect();
+        // Onto a single file or a compare: they join it, side by side.
+        if !ids.is_empty() && self.current().is_some_and(|t| matches!(t.spec.kind, TabKind::Single | TabKind::Compare)) {
+            self.add_members(ids);
+            return;
+        }
         let videos = ids.iter().all(|i| crate::item::media_of(std::path::Path::new(i)) == Some(Media::Video));
         match ids.len() {
             0 => self.toast = Some(("adeck opens audio and video files.".into(), true)),
@@ -873,6 +910,7 @@ impl App {
             t.spec.items = ids;
             t.loop_secs = None;
             t.move_open = false;
+            t.view = None;
             if self.active == Some(tab) {
                 self.sync_mixer();
             }
@@ -995,6 +1033,7 @@ impl App {
     pub fn toggle_zoom(&mut self) {
         if let Some(t) = self.current_mut() {
             t.zoom_sound ^= true;
+            t.view = None;
         }
     }
 
@@ -1082,6 +1121,249 @@ impl App {
         Ok(out)
     }
 
+    // Editing a compare from the UI.
+
+    /// Adds files to the front single or compare, which becomes a compare (up to 9).
+    pub fn add_members(&mut self, ids: Vec<String>) {
+        let Some(tab) = self.active else {
+            self.open_files(ids.into_iter().map(PathBuf::from).collect());
+            return;
+        };
+        let Some(t) = self.tab_mut(tab) else { return };
+        let mut added = 0;
+        for id in ids {
+            if t.spec.items.len() >= 9 {
+                break;
+            }
+            if !t.spec.items.contains(&id) {
+                t.spec.items.push(id);
+                added += 1;
+            }
+        }
+        if t.spec.items.len() > 1 {
+            t.spec.kind = TabKind::Compare;
+        }
+        if t.spec.blind {
+            t.spec.order = shuffle(t.spec.items.len(), t.spec.id);
+        }
+        let full = t.spec.items.len() >= 9;
+        self.toast = Some((if added == 0 && full { "A compare holds 9 files.".into() } else { format!("Added {added} file{}", if added == 1 { "" } else { "s" }) }, false));
+        self.load_tab(tab);
+        self.sync_mixer();
+        self.dirty = true;
+    }
+
+    pub fn remove_member(&mut self, m: usize) {
+        let Some(t) = self.current_mut() else { return };
+        if m >= t.spec.items.len() {
+            return;
+        }
+        t.spec.items.remove(m);
+        t.active = t.active.min(t.spec.items.len().saturating_sub(1));
+        if t.spec.blind {
+            t.spec.order = shuffle(t.spec.items.len(), t.spec.id);
+        }
+        self.sync_mixer();
+        self.dirty = true;
+    }
+
+    /// An empty compare to drop or add files into.
+    pub fn new_compare(&mut self) {
+        self.open(TabKind::Compare, Vec::new(), Some("Compare".into()), false, true, None, None);
+    }
+
+    pub fn open_new_menu(&mut self) {
+        self.menu_runs = source::list_runs(&self.cfg).into_iter().map(|r| r.name).take(24).collect();
+        self.new_menu = true;
+    }
+
+    /// A folder from the UI: a run table of everything in it.
+    pub fn open_folder(&mut self, dir: PathBuf) {
+        let run = dir.display().to_string();
+        let label = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+        self.open(TabKind::Run, Vec::new(), label, false, true, Some(run), None);
+    }
+
+    // Handing the agent what you're on.
+
+    /// Sends the agent a reference to what you're on: the member (`pick`, or the one you're
+    /// hearing), its group, the loop or zoomed stretch, and the playhead. It lands as a
+    /// `reference` row (so `wait_for_feedback` wakes) and as text on the clipboard to paste.
+    pub fn send_to_agent(&mut self, pick: Option<usize>, tx: &mut Tx) {
+        if let Some(text) = self.reference(pick) {
+            tx.copy(text);
+            self.toast = Some(("Sent to the agent, and copied to paste".into(), false));
+        }
+    }
+
+    /// Writes the reference row and returns the text to paste.
+    pub fn reference(&mut self, pick: Option<usize>) -> Option<String> {
+        let t = self.current()?;
+        let label = crate::ui::tab_title(self, t);
+        let mut v = json!({ "tab_id": t.id(), "tab": label, "kind": t.spec.kind });
+        let mut items: Vec<String> = Vec::new();
+        let mut words = vec![format!("adeck tab {} \u{201c}{label}\u{201d}", t.id())];
+        if t.spec.kind == TabKind::Run {
+            items = t.table.selected().map(str::to_owned).collect();
+            if items.is_empty() {
+                items = t.rows.iter().take(1).cloned().collect();
+            }
+            words.push(format!("{} selected", items.len()));
+        } else if let Some(m) = pick.or(Some(t.active)).filter(|m| *m < t.spec.items.len()) {
+            let id = t.spec.items[m].clone();
+            let name = self.entry(&id).map_or_else(|| id.rsplit('/').next().unwrap_or(&id).to_owned(), |e| e.item.name.clone());
+            let shown = match t.focused() {
+                Some(g) => {
+                    v["group"] = json!(g.key);
+                    words.push(g.title().to_owned());
+                    t.board_label(g, m)
+                }
+                None => t.member_label(m),
+            };
+            let hidden = t.focused().map_or(t.is_blind_hidden(), |g| m < g.members.len() && t.group_hidden(&g.key));
+            v["member"] = json!(m);
+            v["label"] = json!(shown);
+            v["item"] = if hidden { Value::Null } else { json!(id) };
+            words.push(if hidden { shown } else { format!("{shown} \u{2014} {name}") });
+            items.push(id);
+        }
+        let range = t.loop_secs.or(t.view);
+        if let Some((a, b)) = range {
+            v["range_s"] = json!([(a * 1000.0).round() / 1000.0, (b * 1000.0).round() / 1000.0]);
+            v["range_is"] = json!(if t.loop_secs.is_some() { "loop" } else { "zoom" });
+            words.push(format!("{}\u{2013}{}", crate::ui::widgets::clock(a), crate::ui::widgets::clock(b)));
+        }
+        if self.mixer_is_for(t.id()) {
+            v["playhead_s"] = json!((self.mixer.secs() * 1000.0).round() / 1000.0);
+        }
+        let note = t.note.text.trim().to_owned();
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "reference".into(), items, value: v, note, blind: t.spec.blind, reveal_map: None };
+        let text = words.join(" \u{b7} ") + " (adeck get_selection)";
+        if !self.write(row) {
+            return None;
+        }
+        if let Some(t) = self.current_mut() {
+            t.note = TextEdit::new("");
+        }
+        Some(text)
+    }
+
+    // The time axis: zoom, scrub, strip height.
+
+    /// The stretch the strips show for the front tab.
+    pub fn window(&self, t: &Tab) -> (f64, f64) {
+        let total = crate::ui::widgets::tab_secs(self, t);
+        if let Some((a, b)) = t.view {
+            return (a.max(0.0), b.min(total.max(b)));
+        }
+        if t.board().is_some() && t.zoom_sound
+            && let Some(r) = self.view_range()
+        {
+            return r;
+        }
+        (0.0, total)
+    }
+
+    /// Zooms the time axis by `factor` (below 1 zooms in), around the playhead when it's in view.
+    pub fn zoom(&mut self, factor: f64) {
+        let Some(t) = self.current() else { return };
+        let total = crate::ui::widgets::tab_secs(self, t);
+        if total <= 0.0 {
+            return;
+        }
+        let (lo, hi) = self.window(t);
+        let ph = crate::ui::widgets::playhead(self, t);
+        let mid = if ph >= lo && ph <= hi { ph } else { (lo + hi) / 2.0 };
+        let span = ((hi - lo) * factor).clamp(0.01_f64.min(total), total);
+        let a = (mid - (mid - lo) / (hi - lo).max(1e-9) * span).clamp(0.0, total - span);
+        let view = if span >= total - 1e-6 { None } else { Some((a, a + span)) };
+        if let Some(t) = self.current_mut() {
+            t.view = view;
+            if view.is_none() {
+                t.zoom_sound = false;
+            }
+        }
+    }
+
+    /// Fits the whole file, or the loop when there is one and it isn't already shown.
+    pub fn zoom_fit(&mut self) {
+        let Some(t) = self.current_mut() else { return };
+        t.view = match t.loop_secs {
+            Some(l) if t.view != Some(l) => Some(l),
+            _ => None,
+        };
+        t.zoom_sound = false;
+    }
+
+    /// Shifts a zoomed view by a fraction of its width.
+    pub fn pan(&mut self, frac: f64) {
+        let Some(t) = self.current() else { return };
+        let total = crate::ui::widgets::tab_secs(self, t);
+        let Some((a, b)) = t.view else { return };
+        let span = b - a;
+        let na = (a + span * frac).clamp(0.0, (total - span).max(0.0));
+        if let Some(t) = self.current_mut() {
+            t.view = Some((na, na + span));
+        }
+    }
+
+    /// A press or drag across a strip: it scrubs, playing from wherever the pointer is, and
+    /// goes back to how it was when the drag ends.
+    pub fn scrub(&mut self, at: f64, phase: rune::Phase) {
+        let playing = self.current().is_some_and(|t| self.mixer_is_for(t.id())) && self.mixer.is_playing();
+        match phase {
+            rune::Phase::Down => {
+                if let Some(t) = self.current_mut() {
+                    t.scrub_resume = Some(playing);
+                }
+                self.seek_secs(at);
+            }
+            rune::Phase::Up => {
+                self.seek_secs(at);
+                let resume = self.current_mut().and_then(|t| t.scrub_resume.take()).unwrap_or(false);
+                if !resume {
+                    self.mixer.pause();
+                }
+            }
+            _ => {
+                self.seek_secs(at);
+                if !playing {
+                    self.mixer.play();
+                }
+            }
+        }
+    }
+
+    pub fn set_volume(&mut self, v: f32) {
+        self.mixer.set_volume(v);
+    }
+
+    pub fn toggle_note(&mut self) {
+        if let Some(t) = self.current_mut() {
+            t.note_open ^= true;
+        }
+    }
+
+    /// Keeps a zoomed view on the playhead while it plays: it turns the page when the playhead
+    /// runs off the right edge.
+    fn follow_playhead(&mut self) {
+        let Some(t) = self.current() else { return };
+        let Some((a, b)) = t.view else { return };
+        if !self.mixer_is_for(t.id()) || !self.mixer.is_playing() {
+            return;
+        }
+        let ph = self.mixer.secs();
+        if ph >= a && ph <= b {
+            return;
+        }
+        let total = crate::ui::widgets::tab_secs(self, t);
+        let span = b - a;
+        let na = (ph - span * 0.05).clamp(0.0, (total - span).max(0.0));
+        if let Some(t) = self.current_mut() {
+            t.view = Some((na, na + span));
+        }
+    }
+
     // The frame.
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
@@ -1099,6 +1381,7 @@ impl App {
         }
         if self.mixer.is_playing() || self.mixer.is_loading() {
             self.sync_videos(false);
+            self.follow_playhead();
             tx.wake_after(std::time::Duration::from_millis(33));
             changed = true;
         }
@@ -1399,6 +1682,13 @@ impl App {
             "board_upsert" => {
                 let id = tab_arg().ok_or("tab_id is required")?;
                 self.upsert(id, a)
+            }
+            "get_selection" => {
+                let since = a.get("since").and_then(Value::as_f64).unwrap_or(0.0);
+                let n = a.get("limit").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+                let rows: Vec<Row> = self.feedback.read_all().into_iter().filter(|r| r.kind == "reference" && r.ts > since).collect();
+                let last: Vec<Value> = rows.iter().rev().take(n).map(|r| json!({ "ts": r.ts, "note": r.note, "ref": r.value })).collect();
+                Ok(json!({ "references": last, "total": rows.len() }))
             }
             "get_decisions" => {
                 let mut items = ids("items");

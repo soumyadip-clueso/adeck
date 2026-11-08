@@ -364,6 +364,75 @@ mod tests {
     }
 
     #[test]
+    fn files_dropped_on_a_single_make_it_a_compare_and_members_come_off() {
+        let mut rt = rt(single);
+        let extra = ids(&["tone-a", "tone-b"]);
+        rt.state.open_files(extra.iter().map(std::path::PathBuf::from).collect());
+        let t = rt.state.current().unwrap();
+        assert_eq!(t.spec.kind, TabKind::Compare);
+        assert_eq!(t.spec.items.len(), 3);
+        assert_eq!(rt.state.tabs.len(), 1, "they joined the open tab");
+        rt.state.remove_member(0);
+        assert_eq!(rt.state.current().unwrap().spec.items, extra);
+        rt.state.new_compare();
+        assert!(rt.state.current().unwrap().spec.items.is_empty());
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("drop-zone").is_some());
+    }
+
+    #[test]
+    fn zoom_narrows_the_window_around_the_playhead_and_fit_undoes_it() {
+        let mut rt = rt(single);
+        let t = rt.state.current().unwrap();
+        assert_eq!(rt.state.window(t), (0.0, 10.0));
+        rt.state.zoom(0.5);
+        rt.state.zoom(0.5);
+        let (a, b) = rt.state.window(rt.state.current().unwrap());
+        assert!((b - a - 2.5).abs() < 1e-6, "{a}..{b}");
+        rt.state.pan(0.5);
+        let (a2, _) = rt.state.window(rt.state.current().unwrap());
+        assert!(a2 > a);
+        rt.state.zoom_fit();
+        assert_eq!(rt.state.window(rt.state.current().unwrap()), (0.0, 10.0));
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        for key in ["ruler", "strip-grip", "scrubber", "volume", "zoom-in", "send"] {
+            assert!(rt.find(key).is_some(), "{key}");
+        }
+    }
+
+    #[test]
+    fn sending_to_the_agent_lands_as_a_reference_it_can_read() {
+        let mut rt = rt(board);
+        rt.state.set_loop(Some((0.2, 0.6)));
+        let text = rt.state.reference(Some(1)).unwrap();
+        assert!(text.contains("Soft whoosh") && text.contains("Pick 2"), "{text}");
+        let v = rt.state.call("get_selection", &serde_json::json!({})).unwrap();
+        let r = &v["references"][0]["ref"];
+        assert_eq!(r["group"], "whoosh-soft");
+        assert_eq!(r["member"], 1);
+        assert_eq!(r["range_is"], "loop");
+        assert!(r["item"].as_str().unwrap().ends_with("tone-a.wav"));
+    }
+
+    #[test]
+    fn the_note_and_the_agents_note_fold_away() {
+        let mut rt = rt(single);
+        assert!(rt.find("note").is_none(), "the note field starts hidden");
+        rt.state.toggle_note();
+        rt.state.current_mut().unwrap().annotation_folded = true;
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("note").is_some() && rt.find("annotation-fold").is_some());
+        let id = rt.state.active.unwrap();
+        rt.state.annotate(id, String::new());
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("annotation").is_none());
+    }
+
+    #[test]
     fn a_run_tab_lists_every_fixture() {
         let rt = rt(run);
         let t = rt.state.current().unwrap();

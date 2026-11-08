@@ -357,6 +357,12 @@ pub fn tools() -> Vec<Value> {
             json!({"tab_id": tab, "items": items}),
             &[],
         ),
+        tool(
+            "get_selection",
+            "What the user pointed you at: they double-click a strip, tile or member (or press S / Send to agent) and it lands here with the tab, group, member, item id (null while blind), the loop or zoomed range and the playhead, plus any note. Newest first. wait_for_feedback also wakes on one.",
+            json!({"limit": {"type": "integer", "description": "Default 1."}, "since": {"type": "number"}}),
+            &[],
+        ),
         tool("list_tabs", "Open tabs and which is in front.", json!({}), &[]),
         tool("focus_tab", "Bring a tab to the front.", json!({"tab_id": tab}), &["tab_id"]),
         tool("close_tab", "Close a tab.", json!({"tab_id": tab}), &["tab_id"]),

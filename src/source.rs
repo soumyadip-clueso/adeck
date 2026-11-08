@@ -25,6 +25,10 @@ pub fn run_dir(cfg: &Config, run: &str) -> Option<PathBuf> {
     if let Some(name) = run.strip_prefix("s3:") {
         return Some(s3_run_cache(name));
     }
+    // A folder opened from the window is its own run.
+    if Path::new(run).is_absolute() {
+        return Path::new(run).is_dir().then(|| PathBuf::from(run));
+    }
     cfg.run_roots.iter().map(|r| r.join(run)).find(|d| d.is_dir())
 }
 

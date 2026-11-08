@@ -15,7 +15,11 @@ Forked from [Sleeve](https://github.com/alii/sleeve), a rekordbox app by Alistai
 - **A board**: one card per group (a category, say), sorted by whatever the agent says matters (search count, say), each a row of tiles: the picks, the raw "before", the reference files, with the agent's numbers and a verdict chip, and a tally on top. Click a tile to play it; only one plays, and switching inside a group keeps the position, loudness-matched. The group in focus opens up: waveform and spectrogram zoomed to the sound (a 60 ms click fills the strip), bands, stereo width, tail and attack against the group's target, what made the file (prompt, model, seed, chain, a copyable path), keep / drop / move-to, and the ranked rest of the takes, folded. Blind hides who's who in each group as X, Y, Z until you pick. The agent adds or replaces groups while it's open.
 - **A diff**: run A against run B, one row per group, one column per metric, the change coloured by which way is better, with how many got better and worse. A row that names a file from each side opens them as a compare.
 
-Click a waveform to seek, drag across it to loop, Space plays, ← and → step a second (with ⇧, five), Esc clears the loop, ⌘W closes the tab. Tabs come back when you reopen adeck.
+Press or drag on a waveform to scrub; drag along the time ruler above it to loop a stretch (click the ruler to clear it). − and + zoom the time axis around the playhead (= and − on the keyboard, F fits the file or the loop, [ and ] pan), and a zoomed view follows the playhead as it plays. Drag the handle under the strips to make them taller. The transport has a scrubber over the whole file, the output level and a volume. Space plays, ← and → step a second (with ⇧, five), Esc clears the loop, ⌘W closes the tab. Tabs come back when you reopen adeck.
+
+**+** after the tabs (⌘T) opens a file (⌘O), a folder (as a table), a new empty compare, or a run. Drop files on a single file or a compare and they join it side by side; × takes one off. N opens a note for the agent; the agent's own note folds or dismisses.
+
+**Send to agent**: double-click a strip, a tile or a compare member (or press S) and adeck hands the agent what you're on (the tab, group, member, the loop or zoomed stretch, the playhead and your note) through `get_selection`, and copies a line to paste into the chat.
 
 On a board: ↑ ↓ change group, ← → play the previous or next tile (⇧ seeks five seconds), 1 to 9 play a tile, R replays from the start of the sound, L loops what the strip shows, Z zooms to the sound or the whole file, K keeps, D drops, B goes blind, M toggles the loudness match, Enter picks.
 
@@ -61,6 +65,7 @@ Or in a project's `.mcp.json`:
 | `open_board`, `board_upsert` | A board of groups; add or replace groups (or a diff's rows) while it's open |
 | `open_diff` | Run A against run B, per group and metric |
 | `get_decisions` | Your latest keep / drop / move on each file of a board |
+| `get_selection` | What you pointed the agent at, newest first |
 
 Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
 

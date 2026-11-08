@@ -2,7 +2,7 @@
 
 use rune::Icon;
 
-pub use rune_theme_opencode::icons::{CHECK, CLOSE, MAGNIFYING_GLASS as SEARCH, STOP, WARNING};
+pub use rune_theme_opencode::icons::{CHECK, CHEVRON_DOWN, CHEVRON_RIGHT, CLOSE, FOLDER, MAGNIFYING_GLASS as SEARCH, OPEN_FILE, PLUS, STOP, WARNING};
 
 pub static WAVE: Icon = Icon {
     name: "adeck-wave",
@@ -62,4 +62,16 @@ pub static DIFF: Icon = Icon {
     name: "adeck-diff",
     view: 16.0,
     body: r#"<path d="M5 2.5V9.5M2.5 6H7.5M9 12H13.5M11.25 2.5L11.25 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
+};
+
+pub static SPEAKER: Icon = Icon {
+    name: "adeck-speaker",
+    view: 16.0,
+    body: r#"<path d="M2.75 6.25H5L8.25 3.5V12.5L5 9.75H2.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M10.5 6C11.2 6.6 11.2 9.4 10.5 10M12.25 4.5C13.7 5.9 13.7 10.1 12.25 11.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
+};
+
+pub static MUTED: Icon = Icon {
+    name: "adeck-muted",
+    view: 16.0,
+    body: r#"<path d="M2.75 6.25H5L8.25 3.5V12.5L5 9.75H2.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M10.5 6.25L13.5 9.75M13.5 6.25L10.5 9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
 };

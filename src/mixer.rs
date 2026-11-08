@@ -8,7 +8,7 @@
 //! The device opens on a worker the first time something plays, never at launch, and never in a
 //! headless run.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +31,7 @@ enum Cmd {
     Active(usize),
     Trims(Vec<f32>),
     Loop(Option<(u64, u64)>),
+    Volume(f32),
 }
 
 struct Shared {
@@ -39,6 +40,8 @@ struct Shared {
     /// The set the callback has loaded, so the UI knows its load landed.
     set: AtomicU64,
     ended: AtomicBool,
+    /// The loudest sample of the last buffer out, as f32 bits, for the level meter.
+    level: AtomicU32,
 }
 
 /// What the UI holds.
@@ -62,13 +65,15 @@ pub struct Mixer {
     waker: Option<rune::Waker>,
     /// A load waiting for the device to open.
     pending: Option<(u64, Paths)>,
+    /// Output volume, 0 to 1.5 (linear).
+    pub volume: f32,
 }
 
 impl Default for Mixer {
     fn default() -> Self {
         Mixer {
             tx: None,
-            shared: Arc::new(Shared { pos: AtomicU64::new(0), playing: AtomicBool::new(false), set: AtomicU64::new(0), ended: AtomicBool::new(false) }),
+            shared: Arc::new(Shared { pos: AtomicU64::new(0), playing: AtomicBool::new(false), set: AtomicU64::new(0), ended: AtomicBool::new(false), level: AtomicU32::new(0) }),
             rate: 48_000,
             opening: None,
             queued: Vec::new(),
@@ -82,6 +87,7 @@ impl Default for Mixer {
             want_play: false,
             waker: None,
             pending: None,
+            volume: 1.0,
         }
     }
 }
@@ -317,6 +323,18 @@ impl Mixer {
         changed
     }
 
+    /// The output's peak just now, in dBFS (-90 when silent or paused).
+    pub fn level_db(&self) -> f32 {
+        let v = f32::from_bits(self.shared.level.load(Ordering::Acquire));
+        if !self.is_playing() || v <= 1e-5 { -90.0 } else { 20.0 * v.log10() }
+    }
+
+    pub fn set_volume(&mut self, v: f32) {
+        self.volume = v.clamp(0.0, 1.5);
+        let v = self.volume;
+        self.send(Cmd::Volume(v));
+    }
+
     /// Forgets what's loaded, so the next `load` reloads.
     pub fn unload(&mut self) {
         self.pause();
@@ -339,6 +357,7 @@ struct State {
     step: f32,
     /// Fade in after a seek or start, out before a pause, so nothing clicks.
     master: f32,
+    volume: f32,
 }
 
 fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32), String> {
@@ -359,6 +378,7 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
         looping: None,
         step: 1.0 / (XFADE * rate as f32),
         master: 0.0,
+        volume: 1.0,
     });
     let sh = shared.clone();
     let fill = move |out: &mut [f32]| {
@@ -386,9 +406,11 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
                 Cmd::Active(i) => s.active = i,
                 Cmd::Trims(t) => s.trims = t,
                 Cmd::Loop(l) => s.looping = l,
+                Cmd::Volume(v) => s.volume = v,
             }
         }
         let n = s.tracks.len();
+        let mut loudest = 0f32;
         for frame in out.chunks_mut(channels) {
             let target_master = if s.playing { 1.0 } else { 0.0 };
             let step = s.step;
@@ -413,7 +435,8 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
                     r += b * g * trim;
                 }
             }
-            let m = s.master;
+            let m = s.master * s.volume;
+            loudest = loudest.max((l * m).abs()).max((r * m).abs());
             frame[0] = l * m;
             if channels > 1 {
                 frame[1] = r * m;
@@ -437,6 +460,7 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
             }
         }
         sh.pos.store(s.pos, Ordering::Release);
+        sh.level.store(loudest.to_bits(), Ordering::Release);
     };
     let err = |e: cpal::Error| eprintln!("adeck: audio stream error: {e}");
     let cfg: cpal::StreamConfig = config.into();

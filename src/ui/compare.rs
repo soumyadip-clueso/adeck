@@ -2,7 +2,7 @@
 //! lit. Keys 1-9 switch at the same moment, Enter picks. The loudness match trims each member to
 //! the same LUFS. Blind mode hides names and metadata behind X/Y/Z until you pick.
 
-use rune::{Color, El, col, row, spacer, text};
+use rune::{Color, El, col, el, row, spacer, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Switch};
 
 use crate::app::{App, Tab};
@@ -14,9 +14,11 @@ const LABEL_W: f32 = 210.0;
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let c = &k.c;
-    let total = widgets::tab_secs(s, t);
     let hidden = t.is_blind_hidden();
-    let strip_w = width - LABEL_W - 12.0;
+    // Narrow windows put each name above its waveform instead of beside it.
+    let narrow = width < 620.0;
+    let lead_w = if narrow { width } else { LABEL_W };
+    let strip_w = if narrow { width } else { width - LABEL_W - 12.0 };
 
     let blind = Switch::new(t.spec.blind).label("Blind").disabled(t.spec.revealed).on_toggle(|s: &mut App| s.toggle_blind()).build(k).key("blind");
     let lm = Switch::new(t.spec.loudness_match).label("Match loudness").on_toggle(|s: &mut App| s.toggle_loudness_match()).build(k).key("match");
@@ -28,9 +30,23 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .on_press(|s: &mut App| s.pick())
         .build(k)
         .key("pick");
-    let head = row().key("compare-head").w_full().gap(16.0).center_y().child(widgets::transport(s, t, k)).child(spacer()).child(blind).child(lm).child(pick);
+    let add = Button::new("Add file…")
+        .variant(ButtonVariant::Outline)
+        .control_size(ControlSize::Small)
+        .help("Add a file to compare (or drop files on the window)")
+        .on_press_tx(|_s: &mut App, tx: &mut rune::Tx| crate::ui::pick_files(tx, true))
+        .build(k)
+        .key("add-file");
+    let mut head = row().key("compare-head").w_full().gap(16.0).center_y().flex_wrap().child(text(format!("{} files", t.spec.items.len())).font(k.ty.small).color(c.text_muted)).child(spacer()).child(add);
+    if t.spec.items.len() > 1 {
+        head = head.child(blind).child(lm).child(pick);
+    }
 
-    let mut page = col().key("compare").w_full().h_full().min_h(0.0).gap(10.0).child(head);
+    let mut page = crate::ui::widgets::page("compare", width).gap(10.0).child(head);
+    if t.spec.items.is_empty() {
+        return page.child(crate::ui::drop_zone("Drop audio files here to compare them", k)).child(widgets::note_field(t, k));
+    }
+    page = page.child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }
@@ -74,11 +90,17 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
             detail.push(format!("score {score}"));
         }
         name_col = name_col.child(text(detail.join(" · ")).font(k.ty.small).color(c.text_muted).truncate());
+        let remove = rune_kit::IconButton::new(&crate::ui::icons::CLOSE)
+            .variant(rune_kit::IconButtonVariant::Ghost)
+            .label(format!("Remove {label}"))
+            .on_press(move |s: &mut App| s.remove_member(m))
+            .build(k)
+            .key(format!("remove-{m}"));
         let key_hint = text(format!("{}", pos + 1)).font(k.ty.small_medium.features("'tnum' 1")).color(c.text_faint).w(14.0);
         let lead = row()
             .key(format!("member-{m}"))
-            .w(LABEL_W)
-            .h(ROW_H)
+            .w(lead_w)
+            .h(if narrow { 44.0 } else { ROW_H * t.strip_h })
             .px(10.0)
             .gap(8.0)
             .center_y()
@@ -88,25 +110,35 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
             .cursor(rune::Cursor::Pointer)
             .role("button")
             .label(format!("Listen to {label}"))
-            .help(format!("Listen to {label} · press {}", pos + 1))
+            .help(format!("Listen to {label} · press {} · double-click sends it to the agent", pos + 1))
+            .motion(rune::Spring::SNAPPY)
             .child(key_hint)
             .child(name_col)
-            .on_press(move |s: &mut App| s.set_active_member(m));
-        let wave = widgets::wave_strip(s, t, e, &format!("wave-{m}"), strip_w, ROW_H, total, k);
+            .child(spacer())
+            .child(remove)
+            .on_press(move |s: &mut App| s.set_active_member(m))
+            .on_double_press_tx(move |s: &mut App, tx: &mut rune::Tx| s.send_to_agent(Some(m), tx));
+        let wave = widgets::wave_strip(s, t, e, &format!("wave-{m}"), strip_w, ROW_H, k);
         let wave = if on { wave } else { wave.opacity(0.55) };
-        rows = rows.child(row().w_full().gap(12.0).center_y().child(lead).child(col().grow(1.0).min_w(0.0).child(wave)));
+        let wave = wave.opacity_motion(rune::Spring::SNAPPY);
+        rows = rows.child(if narrow {
+            col().w_full().gap(4.0).child(lead).child(wave)
+        } else {
+            row().w_full().gap(12.0).center_y().child(lead).child(col().grow(1.0).min_w(0.0).child(wave))
+        });
     }
-    page = page.child(rows);
+    let ruler = widgets::ruler(s, t, "ruler", k);
+    page = page.child(if narrow { ruler } else { row().w_full().gap(12.0).child(el().w(LABEL_W)).child(col().grow(1.0).min_w(0.0).child(ruler)) }).child(rows);
 
     // The spectrogram of the one you hear.
     let active_id = t.spec.items.get(t.active).cloned().unwrap_or_default();
-    page = page.child(
-        row()
-            .w_full()
-            .gap(12.0)
-            .child(col().w(LABEL_W).child(widgets::section_title(&format!("Spectrogram · {}", t.member_label(t.active)), k)))
-            .child(col().grow(1.0).min_w(0.0).child(widgets::spec_strip(s, t, s.entry(&active_id), "spec", strip_w, 110.0, total, k))),
-    );
+    let title = widgets::section_title(&format!("Spectrogram · {}", t.member_label(t.active)), k);
+    let spec = widgets::spec_strip(s, t, s.entry(&active_id), "spec", strip_w, 110.0, k);
+    page = page.child(if narrow {
+        col().w_full().gap(4.0).child(title).child(spec)
+    } else {
+        row().w_full().gap(12.0).child(col().w(LABEL_W).child(title)).child(col().grow(1.0).min_w(0.0).child(spec))
+    });
 
     // What differs between them, hidden while blind.
     let lower = if hidden {
@@ -114,7 +146,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     } else {
         diff_table(s, t, k)
     };
-    page.child(lower).child(widgets::note_field(t, k))
+    page.child(widgets::grip(t, k)).child(lower)
 }
 
 fn member_name(s: &App, t: &Tab, m: usize) -> String {

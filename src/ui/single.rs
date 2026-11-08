@@ -11,7 +11,6 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let c = &k.c;
     let id = t.spec.items.first().cloned().unwrap_or_default();
     let e = s.entry(&id);
-    let total = widgets::tab_secs(s, t);
 
     let mut name =
         row().gap(8.0).center_y().min_w(0.0).child(text(e.map_or_else(|| id.clone(), |e| e.item.name.clone())).key("name").font(k.ty.ui_medium).color(c.text_base).truncate());
@@ -26,10 +25,18 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .center_y()
         .child(col().gap(2.0).min_w(0.0).shrink().child(name).child(text(sub).font(k.ty.small).color(c.text_muted).truncate()))
         .child(spacer())
-        .child(widgets::transport(s, t, k))
+        .child(
+            rune_kit::Button::new("Compare with…")
+                .variant(rune_kit::ButtonVariant::Outline)
+                .control_size(rune_kit::ControlSize::Small)
+                .help("Add a file beside this one (or drop files on the window)")
+                .on_press_tx(|_s: &mut App, tx: &mut rune::Tx| crate::ui::pick_files(tx, true))
+                .build(k)
+                .key("add-compare"),
+        )
         .child(widgets::score_buttons(s, t, k));
 
-    let mut page = col().key("single").w_full().h_full().min_h(0.0).gap(10.0).child(head);
+    let mut page = crate::ui::widgets::page("single", width).gap(10.0).child(head).child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }
@@ -37,8 +44,10 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         page = page.child(text(err.clone()).font(k.ty.small).color(c.danger.fg).wrap());
     }
     page = page
-        .child(widgets::wave_strip(s, t, e, "wave", width, 120.0, total, k))
-        .child(widgets::spec_strip(s, t, e, "spec", width, 150.0, total, k))
+        .child(widgets::ruler(s, t, "ruler", k))
+        .child(widgets::wave_strip(s, t, e, "wave", width, 120.0, k))
+        .child(widgets::spec_strip(s, t, e, "spec", width, 150.0, k))
+        .child(widgets::grip(t, k))
         .child(widgets::stats(e, None, k));
 
     let prompt = e.and_then(|e| e.item.pick(&["prompt", "caption", "text"]).map(str::to_owned));
@@ -59,5 +68,5 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         Some(e) => col().key("side").grow(1.0).min_w(0.0).h_full().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(widgets::earshot_panel(s, e, k)),
         None => col(),
     };
-    page.child(row().key("lower").w_full().grow(1.0).min_h(0.0).gap(16.0).child(left).child(right)).child(widgets::note_field(t, k))
+    page.child(row().key("lower").w_full().grow(1.0).min_h(0.0).gap(16.0).child(left).child(right))
 }
