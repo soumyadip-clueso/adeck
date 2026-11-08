@@ -45,7 +45,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 sheet::wrap(s, t, main, width, k)
             }
             TabKind::Diff => diff::build(s, t, width, k),
-            TabKind::Shared => shared::build(s, width, k),
+            TabKind::Shared => shared::build(s, t, width, k),
         },
     };
     // Narrow windows scroll the whole page rather than squeezing the strips.
@@ -137,6 +137,13 @@ pub fn tab_title(s: &App, t: &crate::app::Tab) -> String {
 
 fn short(s: &App, id: &str) -> String {
     s.entry(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |e| e.item.name.clone())
+}
+
+/// `/`: into the tab's search box, on tabs that have one.
+pub fn focus_search(s: &mut App) -> bool {
+    let Some(t) = s.current_mut().filter(|t| matches!(t.spec.kind, TabKind::Board | TabKind::Run | TabKind::Shared)) else { return false };
+    t.filter.focused = true;
+    true
 }
 
 /// The "+" after the tabs: open a file or folder, a new compare, or a run.
@@ -294,6 +301,9 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     let Some(kind) = s.current().map(|t| t.spec.kind) else { return false };
+    if plain && ev.key == rune::Key::Text("/".into()) && focus_search(s) {
+        return true;
+    }
     if matches!(kind, TabKind::Run | TabKind::Diff | TabKind::Shared) {
         return false;
     }

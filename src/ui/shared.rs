@@ -5,10 +5,10 @@
 use rune::{El, Tx, col, row, spacer, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Spinner};
 
-use crate::app::App;
+use crate::app::{App, Tab};
 use crate::share::Share;
 
-pub fn build(s: &App, width: f32, k: &Kit) -> El {
+pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let c = &k.c;
     let live = s.shares.iter().filter(|x| !x.gone).count();
     let summary = match s.shares.len() {
@@ -28,6 +28,7 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .gap(12.0)
         .center_y()
         .flex_wrap()
+        .child(crate::ui::widgets::search_field(t, "Search shared pages  /", 240.0, k))
         .child(text(summary).font(k.ty.ui_medium).color(c.text_base))
         .child(status)
         .child(spacer())
@@ -46,8 +47,13 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
                 .child(text("Add a [share] section to ~/.config/adeck/config.toml naming the program that publishes a page (see the README).").font(k.ty.small).color(c.text_muted)),
         );
     }
-    for sh in &s.shares {
+    let q = t.filter.text.trim().to_lowercase();
+    let shown: Vec<_> = s.shares.iter().filter(|x| q.is_empty() || x.title.to_lowercase().contains(&q) || x.url.to_lowercase().contains(&q)).collect();
+    for sh in &shown {
         list = list.child(entry(s, sh, width, k));
+    }
+    if shown.is_empty() && !s.shares.is_empty() {
+        list = list.child(text(format!("No shared page matches “{}”.", t.filter.text.trim())).font(k.ty.small).color(c.text_muted).py(16.0));
     }
     col().key("shared").w_full().h_full().min_h(0.0).gap(14.0).child(head).child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
 }

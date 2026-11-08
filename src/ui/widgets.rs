@@ -475,6 +475,27 @@ pub fn note_field(tab: &Tab, k: &Kit) -> El {
     row().key("note-row").w_full().gap(8.0).center_y().transition(rune::Transition::offset(0.0, 12.0).combined(rune::Transition::opacity())).child(col().grow(1.0).min_w(0.0).child(input)).child(save).child(close)
 }
 
+/// A tab's search box: narrows what the tab lists as you type. `/` focuses it, Esc clears it.
+pub fn search_field(t: &Tab, placeholder: &str, width: f32, k: &Kit) -> El {
+    rune_kit::TextInput::new(&t.filter)
+        .placeholder(placeholder.to_owned())
+        .leading_icon(&icons::SEARCH)
+        .width(Some(width))
+        .clear_button()
+        .on_edit(|s: &mut App| &mut s.current_mut().expect("a tab").filter)
+        .on_key(|s: &mut App, ev: &rune::KeyEvent, _tx: &mut Tx| {
+            if ev.key != rune::Key::Escape {
+                return false;
+            }
+            if let Some(t) = s.current_mut() {
+                t.filter = rune::TextEdit::new("");
+            }
+            true
+        })
+        .build(k)
+        .key("tab-search")
+}
+
 /// Rows of key and value, in a scrolling column.
 pub fn kv_table(key: &str, rows: &[(String, String)], highlight: &dyn Fn(&str) -> bool, k: &Kit) -> El {
     let c = &k.c;

@@ -1490,6 +1490,28 @@ impl App {
         Ok(())
     }
 
+    /// A board's groups in order, narrowed by the tab's search: a group stays when its title,
+    /// key, subtitle or chip matches, or any of its sounds does (label, role or file name).
+    pub fn shown_groups<'a>(&self, t: &'a Tab) -> Vec<&'a crate::board::Group> {
+        let Some(b) = t.board() else { return Vec::new() };
+        let q = t.filter.text.trim().to_lowercase();
+        if q.is_empty() {
+            return b.sorted();
+        }
+        let has = |s: &str| s.to_lowercase().contains(&q);
+        b.sorted()
+            .into_iter()
+            .filter(|g| {
+                has(g.title()) || has(&g.key) || g.subtitle.as_deref().is_some_and(has) || g.chip.as_ref().is_some_and(|c| has(&c.text)) || {
+                    let hidden = t.group_hidden(&g.key);
+                    g.playable().iter().enumerate().any(|(i, m)| {
+                        has(&t.board_label(g, i)) || (!hidden && (has(&m.role) || self.entry(&m.item).is_some_and(|e| !e.item.is_ref && has(&e.item.name))))
+                    })
+                }
+            })
+            .collect()
+    }
+
     /// Whether the front tab is a kind that shares (cheap: for the footer button).
     pub fn can_share(&self) -> bool {
         self.current().is_some_and(|t| !matches!(t.spec.kind, TabKind::Run | TabKind::Diff | TabKind::Shared))

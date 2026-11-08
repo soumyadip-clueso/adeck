@@ -8,7 +8,7 @@ use crate::app::{App, TabKind};
 
 type Scene = (&'static str, fn(&mut App));
 
-pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads), ("palette", palette), ("palette-search", palette_search)];
+pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads), ("palette", palette), ("palette-search", palette_search), ("board-search", board_search)];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -186,6 +186,13 @@ fn palette_search(s: &mut App) {
     if let Some(p) = s.palette.as_mut() {
         p.query = rune::TextEdit::new("tone");
         p.query.focused = true;
+    }
+}
+
+fn board_search(s: &mut App) {
+    board(s);
+    if let Some(t) = s.current_mut() {
+        t.filter = rune::TextEdit::new("click");
     }
 }
 
@@ -563,6 +570,22 @@ mod tests {
         rt.frame(1.0 / 60.0);
         assert!(rt.state.palette.is_none(), "closed after running");
         assert_ne!(rt.state.current().unwrap().spec.blind, was, "blind toggled");
+    }
+
+    #[test]
+    fn searching_a_board_narrows_it_and_slash_focuses_the_box() {
+        let mut rt = rt(board);
+        assert_eq!(rt.state.shown_groups(rt.state.current().unwrap()).len(), 2);
+        assert!(crate::ui::focus_search(&mut rt.state));
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.current().unwrap().filter.focused, "/ focuses the search");
+        rt.state.current_mut().unwrap().filter = rune::TextEdit::new("ui click");
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        let shown: Vec<String> = rt.state.shown_groups(rt.state.current().unwrap()).iter().map(|g| g.key.clone()).collect();
+        assert_eq!(shown, vec!["ui-click".to_owned()]);
+        assert!(rt.find("group-whoosh-soft").is_none() && rt.find("tab-search").is_some());
     }
 
     #[test]

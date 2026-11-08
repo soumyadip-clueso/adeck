@@ -35,6 +35,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .gap(14.0)
         .center_y()
         .flex_wrap()
+        .child(widgets::search_field(t, "Search sounds  /", 200.0, k))
         .child(stop)
         .child(widgets::meter(s, k))
         .child(widgets::volume(s, k))
@@ -74,9 +75,13 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let focused = t.focused().map(|g| g.key.clone());
     let inner = width - 14.0;
     let mut list = col().key("pad-groups").w_full().gap(18.0).pr(10.0);
-    for g in b.sorted() {
+    let shown = s.shown_groups(t);
+    for g in &shown {
         let on = focused.as_deref() == Some(g.key.as_str());
         list = list.child(group(s, t, g, on, inner, k));
+    }
+    if shown.is_empty() && !b.groups.is_empty() {
+        list = list.child(text(format!("No sound matches “{}”.", t.filter.text.trim())).font(k.ty.small).color(c.text_muted).py(20.0));
     }
     if b.groups.is_empty() {
         list = list.child(text("No pads yet. The agent adds them as sounds land.").font(k.ty.small).color(c.text_muted).py(20.0));

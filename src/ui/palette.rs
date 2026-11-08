@@ -151,7 +151,7 @@ pub fn results(s: &App, q: &str) -> Vec<Hit> {
         })
         .collect();
     // Best hits first, but each section stays together, sections ordered by their best hit.
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|x| std::cmp::Reverse(x.0));
     let mut order: Vec<&'static str> = Vec::new();
     for (_, h) in &scored {
         if !order.contains(&h.section) {

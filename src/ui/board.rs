@@ -28,7 +28,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     for (tone, n) in b.tally() {
         tally = tally.child(row().gap(5.0).center_y().child(chip(&Chip { text: n.to_string(), tone: tone.clone() }, k)).child(text(tone_word(&tone)).font(k.ty.small).color(c.text_muted)));
     }
-    let head = row().key("board-head").w_full().gap(14.0).center_y().flex_wrap().child(tally).child(spacer()).child(blind).child(lm).child(zoom);
+    let head = row().key("board-head").w_full().gap(14.0).center_y().flex_wrap().child(widgets::search_field(t, "Search groups and sounds  /", 240.0, k)).child(tally).child(spacer()).child(blind).child(lm).child(zoom);
 
     let mut page = col().key("board").w_full().h_full().min_h(0.0).gap(10.0).child(head).child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
     if let Some(a) = widgets::annotation(t, k) {
@@ -40,9 +40,13 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let focused = t.focused().map(|g| g.key.clone());
     let inner = width - 14.0;
     let mut list = col().key("groups").w_full().gap(12.0).pr(10.0);
-    for g in b.sorted() {
+    let shown = s.shown_groups(t);
+    for g in &shown {
         let on = focused.as_deref() == Some(g.key.as_str());
         list = list.child(group_card(s, t, g, on, inner, k));
+    }
+    if shown.is_empty() && !b.groups.is_empty() {
+        list = list.child(text(format!("No group or sound matches “{}”.", t.filter.text.trim())).font(k.ty.small).color(c.text_muted).py(20.0));
     }
     if b.groups.is_empty() {
         list = list.child(text("Nothing on this board yet. The agent adds groups as results land.").font(k.ty.small).color(c.text_muted).py(20.0));
