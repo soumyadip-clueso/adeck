@@ -88,23 +88,35 @@ pub fn role_color(role: &str, _k: &Kit) -> Color {
 fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El {
     let hidden = t.group_hidden(&g.key);
     let key = g.key.clone();
-    let mut head = row().w_full().gap(12.0).center_y().flex_wrap().child(text(g.title().to_uppercase()).font(px::pixel(20.0)).color(if on { px::LED } else { px::SOFT }));
-    if let Some(sub) = &g.subtitle {
-        head = head.child(text(sub.to_uppercase()).font(px::pixel(11.0)).color(px::FAINT));
+    // A fixed-height head whose right end always holds the same-sized slot, so focusing a group
+    // (by playing, arrows or scrolling) never moves anything.
+    let mut head = row()
+        .w_full()
+        .h(30.0)
+        .gap(12.0)
+        .center_y()
+        .child(text(g.title().to_uppercase()).font(px::pixel(20.0)).color(if on { px::LED } else { px::SOFT }).truncate().shrink().min_w(80.0));
+    if let Some(sub) = g.subtitle.as_ref().filter(|_| width >= 520.0) {
+        head = head.child(text(sub.to_uppercase()).font(px::pixel(11.0)).color(px::FAINT).truncate().shrink());
     }
     head = head.child(spacer());
-    if let Some(ch) = g.chip.as_ref().filter(|_| !hidden) {
+    // On a narrow card the verdict chip gets its own line so the title keeps its room.
+    let tight = width < 620.0;
+    if let Some(ch) = g.chip.as_ref().filter(|_| !hidden && !tight) {
         head = head.child(chip(ch, k));
     }
-    if !on {
+    let slot = if on {
+        row().h(28.0).center().child(px::lamp("In pane", px::AMBER)).help("This group's target and detail are in the pane")
+    } else {
         let k2 = key.clone();
-        head = head.child(px::key("OPEN", false).key(format!("open-{key}")).help("Focus this group: its target and detail open in the pane").on_press(move |s: &mut App| {
+        px::key("OPEN", false).key(format!("open-{key}")).help("Focus this group: its target and detail open in the pane").on_press(move |s: &mut App| {
             s.focus_group(&k2);
             if s.pane == px::Dock::Hidden {
                 s.toggle_pane();
             }
-        }));
-    }
+        })
+    };
+    head = head.child(row().w(84.0).h(28.0).child(spacer()).child(slot));
     let mut card = col()
         .key(format!("group-{key}"))
         .w_full()
@@ -115,6 +127,9 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
         .fill(if on { px::RAISED } else { Color::TRANSPARENT })
         .border(1.0, if on { px::GRILLE_ON } else { px::LINE })
         .child(head);
+    if let Some(ch) = g.chip.as_ref().filter(|_| !hidden && tight) {
+        card = card.child(row().child(chip(ch, k)));
+    }
 
     // The tiles, wrapped to the width.
     let order = t.group_order(g);
@@ -122,20 +137,18 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
     let cols = (((inner + GAP) / (TILE_MIN + GAP)).floor() as usize).clamp(1, order.len().max(1));
     let tile_w = (inner - GAP * (cols as f32 - 1.0)) / cols as f32;
     for (r, chunk) in order.chunks(cols).enumerate() {
-        let mut line = row().key(format!("tiles-{key}-{r}")).w_full().gap(GAP);
+        let mut line = row().key(format!("tiles-{key}-{r}")).w_full().gap(GAP).items_stretch();
         for (i, &m) in chunk.iter().enumerate() {
             line = line.child(tile(s, t, g, m, on, r * cols + i, tile_w, k));
         }
         card = card.child(line);
     }
-    if !on {
-        if !g.more.is_empty() {
-            card = card.child(text(format!("+ {} MORE TAKES", g.more.len())).font(px::pixel(11.0)).color(px::FAINT));
-        }
-        return card;
-    }
+    // The same lines whether it's focused or not.
     if let Some(n) = &g.note {
         card = card.child(rune_kit::Markdown::new(n.clone()).build(k));
+    }
+    if !g.more.is_empty() {
+        card = card.child(text(format!("+ {} MORE TAKES · RANKED IN THE PANE", g.more.len())).font(px::pixel(10.0)).color(px::FAINT));
     }
     card
 }
@@ -150,8 +163,8 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     let playing = active && s.mixer_is_for(t.id()) && s.mixer.is_playing();
     let label = t.board_label(g, m);
     let mut top = row().gap(6.0).center_y();
-    if focused && pos < 9 {
-        top = top.child(text((pos + 1).to_string()).font(px::pixel(11.0)).color(px::OFF));
+    if pos < 9 {
+        top = top.child(text((pos + 1).to_string()).font(px::pixel(11.0)).color(if focused { px::SILK } else { px::OFF }));
     }
     top = top.child(text(label.to_uppercase()).font(px::pixel(12.0)).color(if hidden { px::LED } else { role_color(&mem.role, k) }).truncate().shrink());
     if !hidden && e.is_some_and(|e| e.item.is_ref) {
@@ -186,7 +199,7 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     }
     let secs = e.and_then(|e| e.analysis.as_ref()).map(|a| a.secs);
     if let Some(sec) = secs {
-        body = body.child(text(if sec < 1.0 { format!("{:.0} MS", sec * 1000.0) } else { format!("{sec:.1} S") }).font(px::pixel(10.0)).color(px::FAINT));
+        body = body.child(spacer()).child(text(if sec < 1.0 { format!("{:.0} MS", sec * 1000.0) } else { format!("{sec:.1} S") }).font(px::pixel(10.0)).color(px::FAINT));
     }
     let key = g.key.clone();
     col()
@@ -206,6 +219,7 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
                 px::LINE
             },
         )
+        .hover(if active { px::SELECTED } else { px::RAISED })
         .cursor(rune::Cursor::Pointer)
         .role("button")
         .label(format!("Play {label}"))
@@ -259,57 +273,74 @@ pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     let Some(mem) = all.get(t.active).copied() else { return col() };
     let hidden = t.active < g.members.len() && t.group_hidden(&g.key);
     let e = s.entry(&mem.item);
-    let mut d = col().key("detail").w_full().gap(8.0);
     let label = t.board_label(g, t.active);
-    let mut caption = row().w_full().gap(8.0).center_y().flex_wrap().child(text(format!("HEARING {}", label.to_uppercase())).font(px::pixel(12.0)).color(px::LED));
-    if let Some(e) = e {
-        if e.analysis.is_some() {
-            let (a, b) = s.window(t);
-            let whole = e.analysis.as_ref().map_or(0.0, |x| x.secs);
-            let what = if b - a < whole - 1e-3 { format!("{}–{} of {}", widgets::clock(a), widgets::clock(b), widgets::clock(whole)) } else { widgets::clock(whole) };
-            caption = caption.child(text(what).font(px::pixel(11.0)).color(px::SILK));
-        }
-        if let Some(tr) = s.trim_db(t, &mem.item) {
-            caption = caption.child(text(format!("MATCHED {tr:+.1} DB")).font(px::pixel(11.0)).color(px::SILK));
-        }
+
+    // What you're hearing, its length and trim, and the keys that act on it.
+    let mut when = col().gap(4.0).items_end();
+    if let Some(e) = e
+        && e.analysis.is_some()
+    {
+        let (a, b) = s.window(t);
+        let whole = e.analysis.as_ref().map_or(0.0, |x| x.secs);
+        let what = if b - a < whole - 1e-3 { format!("{}–{}", widgets::clock(a), widgets::clock(b)) } else { widgets::clock(whole) };
+        when = when.child(text(what).font(px::pixel(13.0)).color(px::SOFT));
     }
-    caption = caption.child(spacer());
+    if let Some(tr) = s.trim_db(t, &mem.item) {
+        when = when.child(text(format!("MATCHED {tr:+.1} DB")).font(px::pixel(10.0)).color(px::FAINT));
+    }
     let looping = t.loop_secs.is_some();
-    caption = caption.child(px::key("REPLAY", false).key("replay").help("From the start of the sound · R").on_press(|s: &mut App| s.board_replay())).child(
-        px::key("LOOP", looping).key("loop-toggle").help("Loop what the strip shows · L. Drag across the strip to loop part of it.").on_press(|s: &mut App| s.board_toggle_loop()),
-    );
+    let mut keys = vec![
+        px::key_k("REPLAY", "R", false).key("replay").help("From the start of the sound · R").on_press(|s: &mut App| s.board_replay()),
+        px::key_k("LOOP", "L", looping)
+            .key("loop-toggle")
+            .help("Loop what the strip shows · L. Drag across the strip to loop part of it.")
+            .on_press(|s: &mut App| s.board_toggle_loop()),
+    ];
     if t.spec.blind && !t.spec.revealed_groups.contains(&g.key) {
-        caption = caption.child(
-            px::key(format!("PICK {}", label.to_uppercase()), true)
+        keys.push(
+            px::key_k(format!("PICK {}", label.to_uppercase()), "↵", true)
                 .key("board-pick")
                 .help("The one you're hearing is the best here · Enter")
                 .on_press(|s: &mut App| s.board_pick()),
         );
     }
-    d = d.child(caption);
+    let hearing = col()
+        .key("hearing")
+        .w_full()
+        .gap(12.0)
+        .pb(14.0)
+        .child(
+            row()
+                .w_full()
+                .gap(12.0)
+                .items_end()
+                .child(col().gap(4.0).min_w(0.0).shrink().child(px::label("Hearing")).child(text(label.to_uppercase()).font(px::pixel(22.0)).color(px::LED).truncate()))
+                .child(spacer())
+                .child(when),
+        )
+        .child(px::segments(keys));
+    let mut d = col().key("detail").w_full().child(hearing);
     if let Some(e) = e {
-        d = d.child(widgets::ruler(s, t, "bruler", k)).child(widgets::wave_strip(s, t, Some(e), "bwave", width, 72.0, k)).child(widgets::spec_strip(
-            s,
-            t,
-            Some(e),
-            "bspec",
-            width,
-            96.0,
-            k,
+        d = d.child(
+            col()
+                .key("strips")
+                .w_full()
+                .gap(6.0)
+                .pb(16.0)
+                .child(widgets::ruler(s, t, "bruler", k))
+                .child(widgets::wave_strip(s, t, Some(e), "bwave", width, 72.0, k))
+                .child(widgets::spec_strip(s, t, Some(e), "bspec", width, 96.0, k)),
+        );
+    }
+    if hidden {
+        return d.child(px::section(
+            "blind",
+            "Blind",
+            None,
+            text("The numbers and what made it show after you pick.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).wrap(),
         ));
     }
-
-    // Analysis beside details when there's room, else stacked.
-    let wide = width >= 760.0;
-    let half = if wide { (width - 16.0) / 2.0 } else { width };
-    let left = if hidden {
-        col().w(half).child(text("Blind: the numbers show after you pick.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT))
-    } else {
-        analysis(s, g, mem, e, half, k)
-    };
-    let right = if hidden { col().w(half) } else { details(s, t, mem, e, half, k) };
-    d = d.child(if wide { row().w_full().gap(16.0).child(left).child(right) } else { col().w_full().gap(12.0).child(left).child(right) });
-
+    d = d.child(analysis(s, g, mem, e, width, k)).child(details(s, t, mem, e, width, k));
     if let Some(dec) = decisions(s, t, mem, k) {
         d = d.child(dec);
     }
@@ -324,10 +355,12 @@ fn measure_of<'a>(mem: &'a Member, e: Option<&'a Entry>) -> Option<&'a Value> {
     mem.measure.as_ref().or_else(|| e.and_then(|e| e.earshot.get("measure")))
 }
 
-/// Bands, stereo width and tail against the group's target.
-fn analysis(s: &App, g: &Group, mem: &Member, e: Option<&Entry>, width: f32, k: &Kit) -> El {
-    let c = &k.c;
-    let mut p = col().key("analysis").w(width).gap(8.0).child(px::label("Against the target").pb(2.0));
+/// Bands, stereo width and tail against the group's target: one row each, in columns.
+fn analysis(s: &App, g: &Group, mem: &Member, e: Option<&Entry>, width: f32, _k: &Kit) -> El {
+    let legend = row()
+        .gap(8.0)
+        .child(text("VALUE").font(px::pixel(9.0)).color(px::OFF).w(VALUE_W).align(rune::Align::End))
+        .child(text("OFF BY").font(px::pixel(9.0)).color(px::OFF).w(OFF_W).align(rune::Align::End));
     let Some(m) = measure_of(mem, e) else {
         let busy = e.is_some_and(|e| e.earshot_busy.contains("measure"));
         let msg = if busy {
@@ -337,43 +370,47 @@ fn analysis(s: &App, g: &Group, mem: &Member, e: Option<&Entry>, width: f32, k: 
         } else {
             "No measurements: earshot isn't installed, and the board didn't include any."
         };
-        return p.child(text(msg).font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).wrap());
+        return px::section("analysis", "Against the target", None, text(msg).font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).wrap());
     };
-    let _ = c;
     let target = g.target().unwrap_or_default();
     let tb = target.get("bands_db").and_then(Value::as_object);
+    let mut rows = col().w_full().gap(9.0);
     if let Some(bands) = m.get("bands_db").and_then(Value::as_object) {
         for b in BANDS {
             let Some(v) = bands.get(b).and_then(Value::as_f64) else { continue };
             let want = tb.and_then(|t| t.get(b)).and_then(Value::as_f64);
-            p = p.child(meter(b, v, want, -60.0, 0.0, |x| format!("{x:.1}"), 3.0, 6.0, width, k));
+            rows = rows.child(meter(b, "dB", v, want, (-60.0, 0.0), 1, (3.0, 6.0), width));
         }
     }
     if let Some(v) = m.get("correlation").and_then(Value::as_f64) {
         let want = target.get("correlation").and_then(Value::as_f64);
-        p = p.child(meter("width", v, want, -1.0, 1.0, |x| format!("{x:.2}"), 0.15, 0.35, width, k).help("Stereo correlation: 1 is mono, 0 wide, below 0 out of phase"));
+        rows = rows.child(meter("width", "", v, want, (-1.0, 1.0), 2, (0.15, 0.35), width).help("Stereo correlation: 1 is mono, 0 wide, below 0 out of phase"));
     }
     for (key, label) in [("decay_ms", "tail"), ("attack_ms", "attack")] {
         if let Some(v) = m.get(key).and_then(Value::as_f64) {
             let want = target.get(key).and_then(Value::as_f64);
             let hi = v.max(want.unwrap_or(0.0)) * 1.25 + 1.0;
             let tol = want.map_or(f64::MAX, |w| w * 0.3);
-            p = p.child(meter(label, v, want, 0.0, hi, |x| format!("{x:.0} ms"), tol, tol * 2.0, width, k));
+            rows = rows.child(meter(label, "ms", v, want, (0.0, hi), 0, (tol, tol * 2.0), width));
         }
     }
     if let Some(v) = m.get("lufs").and_then(Value::as_f64) {
         let want = target.get("lufs").and_then(Value::as_f64);
-        p = p.child(meter("lufs", v, want, -40.0, 0.0, |x| format!("{x:.1}"), 2.0, 4.0, width, k));
+        rows = rows.child(meter("lufs", "", v, want, (-40.0, 0.0), 1, (2.0, 4.0), width));
     }
-    p
+    px::section("analysis", "Against the target", Some(legend), rows)
 }
 
-/// One row: name, a bar for the value on [lo, hi], a tick where the target is, the numbers and
-/// the gap coloured by how far off it is.
+const NAME_W: f32 = 64.0;
+const VALUE_W: f32 = 58.0;
+const OFF_W: f32 = 50.0;
+
+/// One row in columns: the name, LED segments for the value with the target lit as a tick, the
+/// value, and how far off it is, coloured by how much that matters.
 #[allow(clippy::too_many_arguments)]
-fn meter(name: &str, v: f64, want: Option<f64>, lo: f64, hi: f64, fmt: impl Fn(f64) -> String, ok: f64, near: f64, width: f32, _k: &Kit) -> El {
-    const SEGS: usize = 24;
-    let bar_w = (width - 64.0 - 158.0).max(40.0);
+fn meter(name: &str, unit: &str, v: f64, want: Option<f64>, (lo, hi): (f64, f64), places: usize, (ok, near): (f64, f64), width: f32) -> El {
+    let bar_w = (width - NAME_W - VALUE_W - OFF_W - 24.0).max(48.0);
+    let segs = ((bar_w / 5.0) as usize).clamp(12, 28);
     let frac = |x: f64| ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
     let off = want.map(|w| v - w);
     let tone = match off.map(f64::abs) {
@@ -382,12 +419,12 @@ fn meter(name: &str, v: f64, want: Option<f64>, lo: f64, hi: f64, fmt: impl Fn(f
         Some(_) => px::BAD,
         None => px::SOFT,
     };
-    let lit = (frac(v) * SEGS as f64).round() as usize;
-    let at = want.map(|w| ((frac(w) * SEGS as f64) as usize).min(SEGS - 1));
-    let mut bar = row().w(bar_w).h(12.0).gap(2.0).center_y();
-    for i in 0..SEGS {
+    let lit = (frac(v) * segs as f64).round() as usize;
+    let at = want.map(|w| ((frac(w) * segs as f64) as usize).min(segs - 1));
+    let mut bar = row().w(bar_w).h(14.0).gap(2.0).center_y();
+    for i in 0..segs {
         let (ink, h) = if Some(i) == at {
-            (px::LED, 12.0)
+            (px::LED, 14.0)
         } else if i < lit {
             (tone, 8.0)
         } else {
@@ -395,163 +432,200 @@ fn meter(name: &str, v: f64, want: Option<f64>, lo: f64, hi: f64, fmt: impl Fn(f
         };
         bar = bar.child(el().grow(1.0).w(0.0).h(h).fill(ink));
     }
-    let nums = match (want, off) {
-        (Some(w), Some(d)) => format!("{} / {}  {}{}", fmt(v), fmt(w), if d >= 0.0 { "+" } else { "−" }, fmt(d.abs())),
-        _ => fmt(v),
+    let num = |x: f64| format!("{x:.places$}");
+    let shown = if unit == "ms" { format!("{}MS", num(v)) } else { num(v) };
+    let delta = off.map_or_else(String::new, |d| format!("{}{}", if d >= 0.0 { "+" } else { "−" }, num(d.abs())));
+    let help = match want {
+        Some(w) => format!("{name}: {} {unit} · target {} {unit}", num(v), num(w)),
+        None => format!("{name}: {} {unit} · no target", num(v)),
     };
     row()
         .w(width)
         .gap(8.0)
         .center_y()
-        .child(text(name.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).w(56.0))
+        .help(help)
+        .child(text(name.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).w(NAME_W).truncate())
         .child(bar)
-        .child(text(nums.to_uppercase()).font(px::pixel(11.0)).color(tone).w(150.0).truncate())
+        .child(text(shown).font(px::pixel(11.0)).color(px::SOFT).w(VALUE_W).align(rune::Align::End))
+        .child(text(delta).font(px::pixel(11.0)).color(tone).w(OFF_W).align(rune::Align::End))
 }
 
-/// What made the file, its numbers and its path.
-fn details(s: &App, t: &Tab, mem: &Member, e: Option<&Entry>, width: f32, k: &Kit) -> El {
+/// What made the file: the prompt, model, seed and chain (every field when opened), its scores
+/// as small readouts, and the file with a copy button.
+fn details(s: &App, t: &Tab, mem: &Member, e: Option<&Entry>, width: f32, _k: &Kit) -> El {
     let open = t.details_open;
-    let toggle = px::key(if open { "DETAILS ▾" } else { "DETAILS ▸" }, false).key("details-toggle").on_press(|s: &mut App| {
-        if let Some(t) = s.current_mut() {
-            t.details_open ^= true;
-        }
-    });
-    let mut p = col().key("details").w(width).gap(4.0).child(row().w_full().child(toggle));
     let mut rows: Vec<(String, String)> = crate::item::flatten(&Value::Object(mem.meta.clone()));
     if rows.is_empty()
         && let Some(e) = e
     {
         rows = e.item.meta.clone();
     }
-    let prompt = rows.iter().find(|(k, _)| k == "prompt" || k.ends_with(".prompt")).map(|(_, v)| v.clone());
-    if !open {
-        if let Some(pr) = prompt {
-            p = p.child(text(pr).font(rune::TextStyle::new(13.0, 400.0)).color(px::SOFT).wrap());
-        }
-        let brief: Vec<String> = ["model", "seed", "chain"]
-            .iter()
-            .filter_map(|f| rows.iter().find(|(k, _)| k == f || k.ends_with(&format!(".{f}"))).map(|(k, v)| format!("{} {v}", k.rsplit('.').next().unwrap_or(k))))
-            .collect();
-        if !brief.is_empty() {
-            p = p.child(text(brief.join(" · ").to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).wrap());
-        }
-        return p;
+    let short = |k: &str| k.rsplit('.').next().unwrap_or(k).to_owned();
+    let brief: Vec<(String, String)> =
+        ["prompt", "model", "seed", "chain"].iter().filter_map(|f| rows.iter().find(|(k, _)| short(k) == *f).map(|(k, v)| (short(k), v.clone()))).collect();
+    let more = rows.len().saturating_sub(brief.len());
+    let shown: Vec<(String, String)> = if open { rows.iter().take(60).map(|(k, v)| (short(k), v.clone())).collect() } else { brief };
+    let mut body = col().w_full();
+    let n = shown.len();
+    for (i, (k, v)) in shown.iter().enumerate() {
+        body = body.child(px::kv(k, v, i + 1 == n));
     }
-    for (name, value) in rows.iter().take(40) {
-        p = p.child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .child(text(name.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).w(110.0).truncate())
-                .child(text(value.clone()).font(rune::TextStyle::new(12.0, 400.0).mono()).color(px::SOFT).wrap().grow(1.0).min_w(0.0).selectable(true)),
-        );
-    }
-    let mut nums: Vec<String> = mem.numbers.iter().map(|(k, v)| format!("{k} {v}")).collect();
+    // The agent's numbers and the loudness, as readouts three to a row.
+    let mut nums: Vec<(String, String)> = mem
+        .numbers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_f64().map_or_else(|| v.to_string(), |x| format!("{x:.3}").trim_end_matches('0').trim_end_matches('.').to_owned())))
+        .collect();
     if let Some(a) = e.and_then(|e| e.analysis.as_ref()) {
-        nums.push(format!("lufs {}", a.lufs.map_or("–".into(), |l| format!("{l:.1}"))));
-        nums.push(format!("peak {:.1}", a.peak_dbfs));
+        if let Some(l) = a.lufs {
+            nums.push(("lufs".into(), format!("{l:.1}")));
+        }
+        nums.push(("peak".into(), format!("{:.1}", a.peak_dbfs)));
     }
     if !nums.is_empty() {
-        p = p.child(text(nums.join(" · ").to_uppercase()).font(px::pixel(10.0)).color(px::SILK).wrap().selectable(true));
+        let cell_w = ((width - 16.0) / 3.0).floor();
+        let mut grid = row().w_full().pt(12.0).gap(8.0).flex_wrap();
+        for (k, v) in nums {
+            grid = grid.child(
+                col()
+                    .w(cell_w)
+                    .py(8.0)
+                    .px(10.0)
+                    .gap(4.0)
+                    .radius(4.0)
+                    .fill(px::SCREEN)
+                    .border(1.0, px::LINE)
+                    .child(text(k.to_uppercase()).font(px::pixel(9.0)).color(px::FAINT).truncate())
+                    .child(text(v).font(px::pixel(15.0)).color(px::LED).truncate()),
+            );
+        }
+        body = body.child(grid);
     }
     if let Some(e) = e {
         let path = e.item.path.display().to_string();
+        let name = e.item.path.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
         let copy = path.clone();
-        p = p.child(
+        body = body.child(
             row()
+                .key("file-row")
                 .w_full()
-                .gap(6.0)
+                .mt(12.0)
+                .h(34.0)
+                .pl(10.0)
+                .pr(4.0)
+                .gap(8.0)
                 .center_y()
-                .child(text(path).font(rune::TextStyle { size: 11.0, ..k.ty.mono }).color(px::FAINT).wrap().grow(1.0).min_w(0.0).selectable(true))
-                .child(px::key("COPY", false).key("copy-path").help("Copy the path").on_press_tx(move |s: &mut App, tx: &mut Tx| {
+                .radius(4.0)
+                .border(1.0, px::LINE)
+                .help(path)
+                .child(text("FILE").font(px::pixel(9.0)).color(px::FAINT))
+                .child(text(name).font(rune::TextStyle::new(12.0, 400.0).mono()).color(px::SOFT).truncate().grow(1.0).min_w(0.0))
+                .child(px::key_sm("Copy path", false).key("copy-path").on_press_tx(move |s: &mut App, tx: &mut Tx| {
                     tx.copy(copy.clone());
                     s.toast = Some(("Path copied".into(), false));
                 })),
         );
     }
+    let toggle = (more > 0 || open).then(|| {
+        px::link(if open { "Fewer ▴".to_owned() } else { format!("All {} fields ▸", rows.len()) }).key("details-toggle").on_press(|s: &mut App| {
+            if let Some(t) = s.current_mut() {
+                t.details_open ^= true;
+            }
+        })
+    });
     let _ = s;
-    p
+    px::section("details", "What made it", toggle, body)
 }
 
-/// Keep, drop, move: the board's choices for the file you're hearing.
+/// Keep, drop, move: the board's choices for the file you're hearing, as one control.
 fn decisions(s: &App, t: &Tab, mem: &Member, _k: &Kit) -> Option<El> {
     let b = t.board()?;
     if b.choices.is_empty() && b.move_to.is_empty() {
         return None;
     }
     let now = s.decisions.get(&mem.item);
-    let mut r = row().key("decide").w_full().gap(6.0).center_y().flex_wrap().child(px::label("Decision").pr(4.0));
+    let mut items = Vec::new();
     for ch in &b.choices {
         let on = now == Some(ch);
         let (id, v) = (mem.item.clone(), ch.clone());
         let hint = match ch.as_str() {
-            "keep" => " · K",
-            "drop" => " · D",
+            "keep" => "K",
+            "drop" => "D",
             _ => "",
         };
-        r = r.child(px::key(ch.to_uppercase(), on).key(format!("decide-{ch}")).help(format!("{ch}{hint}")).on_press(move |s: &mut App| s.decide(&id, &v)));
+        items.push(
+            px::key_k(ch.to_uppercase(), hint, on)
+                .key(format!("decide-{ch}"))
+                .help(if hint.is_empty() { ch.clone() } else { format!("{ch} · {hint}") })
+                .on_press(move |s: &mut App| s.decide(&id, &v)),
+        );
     }
     if !b.move_to.is_empty() {
         let moved = now.and_then(|n| n.strip_prefix("move:"));
-        r = r.child(px::key(moved.map_or_else(|| "MOVE TO…".to_owned(), |m| format!("MOVED TO {}", m.to_uppercase())), moved.is_some()).key("move").on_press(|s: &mut App| {
-            if let Some(t) = s.current_mut() {
-                t.move_open ^= true;
-            }
-        }));
+        items.push(
+            px::key_k(moved.map_or_else(|| "MOVE TO".to_owned(), |m| format!("IN {}", m.to_uppercase())), if t.move_open { "▴" } else { "▾" }, moved.is_some())
+                .key("move")
+                .help("Move it to another group")
+                .on_press(|s: &mut App| {
+                    if let Some(t) = s.current_mut() {
+                        t.move_open ^= true;
+                    }
+                }),
+        );
     }
-    let mut out = col().w_full().gap(6.0).child(r);
+    let mut body = col().key("decide").w_full().gap(8.0).child(px::segments(items));
     if t.move_open {
         let mut targets = row().key("move-targets").w_full().gap(4.0).flex_wrap();
         for g in &b.move_to {
             let (id, v) = (mem.item.clone(), format!("move:{g}"));
-            targets = targets.child(px::key(g.to_uppercase(), false).key(format!("move-{g}")).on_press(move |s: &mut App| s.decide(&id, &v)));
+            targets = targets.child(px::key_sm(g.clone(), now.is_some_and(|n| *n == v)).key(format!("move-{g}")).on_press(move |s: &mut App| s.decide(&id, &v)));
         }
-        out = out.child(targets);
+        body = body.child(targets);
     }
-    Some(out)
+    Some(px::section("decision", "Decision", None, body))
 }
 
-/// The ranked rest, folded.
-fn more(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
+/// The ranked rest, folded. Click one to hear it.
+fn more(s: &App, t: &Tab, g: &Group, _width: f32, _k: &Kit) -> El {
     let open = t.more_open.contains(&g.key);
     let key = g.key.clone();
-    let toggle = px::key(if open { format!("HIDE THE OTHER {} ▾", g.more.len()) } else { format!("THE OTHER {} RANKED ▸", g.more.len()) }, false)
-        .key("more-toggle")
-        .on_press(move |s: &mut App| s.toggle_more(&key));
-    let mut p = col().key("more").w_full().gap(2.0).child(row().w_full().child(toggle));
-    if !open {
-        return p;
-    }
-    for (i, m) in g.more.iter().enumerate() {
-        let idx = g.members.len() + i;
-        let on = t.active == idx;
-        let key = g.key.clone();
-        let nums = numbers_line(&m.numbers, s, t, g);
-        p = p.child(
-            row()
+    let toggle = px::link(if open { "Hide ▴" } else { "Show ▸" }).key("more-toggle").on_press(move |s: &mut App| s.toggle_more(&key));
+    let mut list = col().key("more").w_full().gap(2.0);
+    if open {
+        for (i, m) in g.more.iter().enumerate() {
+            let idx = g.members.len() + i;
+            let on = t.active == idx;
+            let key = g.key.clone();
+            let nums = numbers_line(&m.numbers, s, t, g);
+            let name = m.label.clone().or_else(|| s.entry(&m.item).map(|e| e.item.name.clone())).unwrap_or_default();
+            let mut r = row()
                 .key(format!("more-{i}"))
-                .w(width)
-                .px(8.0)
-                .py(5.0)
+                .w_full()
+                .h(40.0)
+                .px(10.0)
                 .gap(10.0)
                 .center_y()
-                .radius(k.radius.sm)
+                .radius(4.0)
                 .fill(if on { px::SELECTED } else { Color::TRANSPARENT })
+                .border(1.0, if on { px::GRILLE_ON } else { Color::TRANSPARENT })
+                .hover(px::SELECTED)
                 .cursor(rune::Cursor::Pointer)
                 .role("button")
                 .label(format!("Play take {}", i + 1))
-                .child(text(format!("#{}", i + 1)).font(px::pixel(11.0)).color(px::OFF).w(30.0))
+                .child(text(format!("{:02}", i + 1)).font(px::pixel(11.0)).color(if on { px::LED } else { px::OFF }).w(20.0))
                 .child(
-                    text(m.label.clone().or_else(|| s.entry(&m.item).map(|e| e.item.name.clone())).unwrap_or_default())
-                        .font(rune::TextStyle::new(12.0, 400.0).mono())
-                        .color(if on { px::LED } else { px::SOFT })
-                        .w(140.0)
-                        .truncate(),
-                )
-                .child(text(nums.to_uppercase()).font(px::pixel(10.0)).color(px::SILK).truncate().grow(1.0).min_w(0.0))
-                .child(text(s.decisions.get(&m.item).cloned().unwrap_or_default().to_uppercase()).font(px::pixel(10.0)).color(px::SILK))
-                .on_press(move |s: &mut App| s.board_play(&key, idx)),
-        );
+                    col()
+                        .gap(3.0)
+                        .min_w(0.0)
+                        .grow(1.0)
+                        .child(text(name).font(rune::TextStyle::new(12.0, 400.0).mono()).color(if on { px::LED } else { px::SOFT }).truncate())
+                        .child(text(nums.to_uppercase()).font(px::pixel(9.0)).color(px::FAINT).truncate()),
+                );
+            if let Some(dec) = s.decisions.get(&m.item) {
+                r = r.child(px::tag(dec, if dec == "drop" { px::BAD } else { px::SILK }));
+            }
+            list = list.child(r.on_press(move |s: &mut App| s.board_play(&key, idx)));
+        }
     }
-    p
+    px::section("others", &format!("Other takes · {}", g.more.len()), Some(toggle), list)
 }

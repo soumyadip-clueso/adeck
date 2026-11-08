@@ -42,7 +42,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 TabKind::Single => single::build(s, t, width, k),
                 TabKind::Compare => compare::build(s, t, width, k),
                 TabKind::Render => render::build(s, t, width, k),
-                TabKind::Run => run::build(s, t, k),
+                TabKind::Run => run::build(s, t, width, k),
                 TabKind::Board if t.board().is_some_and(crate::board::Board::is_pads) => pads::build(s, t, width, k),
                 TabKind::Board => board::build(s, t, width, k),
                 TabKind::Diff => diff::build(s, t, width, k),
@@ -69,7 +69,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         root = root.child(statusbar::build(s, full_w, k));
     }
     if let Some(t) = s.current().filter(|t| player::has_player(t)) {
-        root = root.child(player::build(s, t, k));
+        root = root.child(player::build(s, t, full_w, k));
     }
     if let Some((msg, err)) = &s.toast {
         // Above the player; click it or its × to dismiss (it also clears itself after a few seconds).
@@ -343,6 +343,23 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if plain && ev.key == rune::Key::Text("\\".into()) {
         s.toggle_pane();
         return true;
+    }
+    // The pane: ⌘1 to ⌘5 open a section, ⌘[ and ⌘] dock it left or right.
+    if let rune::Key::Command(c) = ev.key
+        && !ev.mods.shift
+    {
+        match c {
+            '1'..='5' if s.pane_section(c as usize - '1' as usize) => return true,
+            '[' => {
+                s.set_pane(crate::ui::px::Dock::Left);
+                return true;
+            }
+            ']' => {
+                s.set_pane(crate::ui::px::Dock::Right);
+                return true;
+            }
+            _ => {}
+        }
     }
     if matches!(kind, TabKind::Run | TabKind::Diff | TabKind::Shared) {
         return false;

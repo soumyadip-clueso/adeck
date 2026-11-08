@@ -115,7 +115,6 @@ pub struct Tab {
     pub view: Option<(f64, f64)>,
     /// Strip height, as a multiple of each strip's own.
     pub strip_h: f32,
-    pub note_open: bool,
     pub annotation_folded: bool,
     /// Scrubbing: whether it was playing when the drag began.
     pub scrub_resume: Option<bool>,
@@ -123,7 +122,6 @@ pub struct Tab {
 
 impl Tab {
     pub fn new(spec: TabSpec) -> Tab {
-        let spec_kind = spec.kind;
         let sheet = spec.board.as_ref().is_some_and(|b| !b.is_pads());
         let filter = TextEdit::new(spec.filter.clone().unwrap_or_default());
         Tab {
@@ -146,7 +144,6 @@ impl Tab {
             sheet_open: sheet,
             view: None,
             strip_h: 1.0,
-            note_open: spec_kind == TabKind::Run,
             annotation_folded: false,
             scrub_resume: None,
         }
@@ -353,6 +350,10 @@ pub struct App {
     pub pane_tab: String,
     /// Where the pane was before it was hidden, so `\\` brings it back there.
     pub pane_last: crate::ui::px::Dock,
+    /// While the pane's grip is dragged: how far, so the view can show where it will dock.
+    pub pane_drag: Option<f32>,
+    /// While the pane's edge is dragged.
+    pub pane_resizing: bool,
     /// The window's size and theme as last drawn, for screenshots.
     pub win: std::cell::Cell<(f32, f32, bool)>,
     pub shooting: bool,
@@ -416,6 +417,8 @@ impl App {
             pane: crate::ui::px::Dock::Right,
             pane_tab: String::new(),
             pane_last: crate::ui::px::Dock::Right,
+            pane_drag: None,
+            pane_resizing: false,
             win: std::cell::Cell::new((1280.0, 800.0, true)),
             shooting: false,
             palette: None,
@@ -1720,18 +1723,6 @@ impl App {
         self.mixer.set_volume(v);
     }
 
-    pub fn toggle_sheet(&mut self) {
-        if let Some(t) = self.current_mut() {
-            t.sheet_open ^= true;
-        }
-    }
-
-    pub fn toggle_note(&mut self) {
-        if let Some(t) = self.current_mut() {
-            t.note_open ^= true;
-        }
-    }
-
     /// Keeps a zoomed view on the playhead while it plays: it turns the page when the playhead
     /// runs off the right edge.
     fn follow_playhead(&mut self) {
@@ -2071,6 +2062,16 @@ impl App {
         if self.pane == crate::ui::px::Dock::Hidden {
             self.pane = self.pane_last;
         }
+    }
+
+    /// ⌘1 to ⌘5: opens the pane on its nth section (bringing it back if hidden).
+    pub fn pane_section(&mut self, n: usize) -> bool {
+        let Some(name) = self.current().and_then(|t| crate::ui::pane::sections(t).get(n).copied()) else { return false };
+        self.pane_tab = name.to_owned();
+        if self.pane == crate::ui::px::Dock::Hidden {
+            self.pane = self.pane_last;
+        }
+        true
     }
 
     /// Docks the pane, or hides it.

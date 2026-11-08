@@ -42,7 +42,7 @@ pub fn cell_value(s: &App, e: &Entry, col: &str) -> String {
     }
 }
 
-pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
+pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let filter = TextInput::new(&t.filter)
         .placeholder("Filter")
         .leading_icon(&crate::ui::icons::SEARCH)
@@ -93,14 +93,24 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
     let tools = row().key("run-tools").gap(8.0).center_y().child(filter).child(unscored).child(open);
     let head = px::header("run-head", t.spec.run.clone().unwrap_or_else(|| "Run".into()), count, tools);
 
-    let table = Table::new(table_state, table_state_mut, rows_len, row_id)
-        .column(TableColumn::new("name", "Name").flex(2.0).min(180.0).sortable())
-        .column(TableColumn::new("what", "Mood / type").flex(1.0).min(110.0).sortable())
-        .column(TableColumn::new("model", "Model").flex(1.0).min(90.0).sortable())
-        .column(TableColumn::new("secs", "Secs").width(64.0).align(rune::Align::End).sortable())
-        .column(TableColumn::new("bpm", "BPM").width(60.0).align(rune::Align::End).sortable())
-        .column(TableColumn::new("lufs", "LUFS").width(64.0).align(rune::Align::End).sortable())
-        .column(TableColumn::new("flags", "Flags").flex(1.0).min(100.0).sortable())
+    // Narrower pages shed the least-used columns rather than clipping the table.
+    let mut table = Table::new(table_state, table_state_mut, rows_len, row_id)
+        .column(TableColumn::new("name", "Name").flex(2.0).min(150.0).sortable())
+        .column(TableColumn::new("what", "Mood / type").flex(1.0).min(100.0).sortable());
+    if width >= 760.0 {
+        table = table.column(TableColumn::new("model", "Model").flex(1.0).min(90.0).sortable());
+    }
+    table = table.column(TableColumn::new("secs", "Secs").width(56.0).align(rune::Align::End).sortable());
+    if width >= 660.0 {
+        table = table.column(TableColumn::new("bpm", "BPM").width(52.0).align(rune::Align::End).sortable());
+    }
+    if width >= 860.0 {
+        table = table.column(TableColumn::new("lufs", "LUFS").width(60.0).align(rune::Align::End).sortable());
+    }
+    if width >= 560.0 {
+        table = table.column(TableColumn::new("flags", "Flags").flex(1.0).min(90.0).sortable());
+    }
+    let table = table
         .column(TableColumn::new("score", "Score").width(60.0).align(rune::Align::End).sortable())
         .cell(|s: &App, i, col| {
             let Some(e) = s.current().and_then(|t| t.rows.get(i)).and_then(|id| s.entry(id)) else {

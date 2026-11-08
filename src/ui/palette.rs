@@ -67,15 +67,18 @@ pub fn everything(s: &App) -> Vec<Hit> {
     if media {
         v.push(cmd("Play / pause", "", "Space", &icons::PLAY, "play"));
         v.push(cmd("Send to agent", "Hand the agent what you're on", "S", &icons::SPARK, "send"));
-        v.push(cmd("Note for the agent", "", "N", &icons::SPARK, "note"));
+        v.push(cmd("Note for the agent", "Opens your note in the pane", "N", &icons::SPARK, "note"));
         v.push(cmd(if t.is_some_and(|t| t.spec.blind) { "Blind off" } else { "Blind on" }, "Hide who's who until you pick", "B", &icons::COMPARE, "blind"));
         v.push(cmd(if t.is_some_and(|t| t.spec.loudness_match) { "Match loudness off" } else { "Match loudness on" }, "", "M", &icons::SPEAKER, "match"));
     }
     if matches!(kind, Some(TabKind::Single | TabKind::Compare | TabKind::Render)) {
         v.push(cmd("Zoom to fit", "Show the whole sound", "F", &icons::WAVE, "fit"));
     }
-    if kind == Some(TabKind::Board) {
-        v.push(cmd("Waveforms sheet", "Waveform, spectrogram and targets for what's playing", "Esc", &icons::WAVE, "sheet"));
+    if t.is_some_and(|t| !crate::ui::pane::sections(t).is_empty()) {
+        let hidden = s.pane == crate::ui::px::Dock::Hidden;
+        v.push(cmd(if hidden { "Show the pane" } else { "Hide the pane" }, "Metadata, diff, earshot, target and your note", "\\", &icons::TABLE, "pane"));
+        v.push(cmd("Dock the pane left", "", "⌘[", &icons::TABLE, "dock-left"));
+        v.push(cmd("Dock the pane right", "", "⌘]", &icons::TABLE, "dock-right"));
     }
     v.push(cmd("Keyboard shortcuts", "Every key, this tab's first", "?", &icons::SPARK, "keys"));
     if t.is_some() {
@@ -199,11 +202,13 @@ fn run(s: &mut App, act: &Act, tx: &mut Tx) {
             "screenshot" => s.screenshot(),
             "play" => s.toggle_play(),
             "send" => s.send_to_agent(None, tx),
-            "note" => s.toggle_note(),
+            "note" => s.show_note(),
             "blind" => s.toggle_blind(),
             "match" => s.toggle_loudness_match(),
             "fit" => s.zoom_fit(),
-            "sheet" => s.toggle_sheet(),
+            "pane" => s.toggle_pane(),
+            "dock-left" => s.set_pane(crate::ui::px::Dock::Left),
+            "dock-right" => s.set_pane(crate::ui::px::Dock::Right),
             "keys" => crate::ui::keys::toggle(s),
             "close" => {
                 if let Some(a) = s.active {

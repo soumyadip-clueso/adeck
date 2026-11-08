@@ -22,7 +22,8 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .w_full()
         .gap(24.0)
         .items_end()
-        .child(col().gap(6.0).min_w(0.0).shrink().child(name).child(text(sub).font(rune::TextStyle::new(13.0, 400.0)).color(px::SILK).truncate()))
+        .flex_wrap()
+        .child(col().gap(6.0).min_w(160.0).shrink().child(name).child(text(sub).font(rune::TextStyle::new(13.0, 400.0)).color(px::SILK).truncate()))
         .child(spacer())
         .child(widgets::readouts(e, None));
 

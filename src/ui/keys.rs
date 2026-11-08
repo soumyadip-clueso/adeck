@@ -22,6 +22,7 @@ const GENERAL: Section = (
         ("?", "This sheet"),
     ],
 );
+const PANE: Section = ("Pane", &[("\\", "Hide or show the pane"), ("⌘1–5", "Open a section"), ("⌘[", "Dock it left"), ("⌘]", "Dock it right"), ("N", "Your note for the agent")]);
 const PLAY: Section = (
     "Listening",
     &[
@@ -31,9 +32,7 @@ const PLAY: Section = (
         ("F", "Fit the file or loop"),
         ("[ ]", "Pan"),
         ("Esc", "Clear the loop"),
-        ("N", "Note for the agent"),
         ("S", "Send to agent"),
-        ("\\", "Hide or show the pane"),
     ],
 );
 const COMPARE: Section =
@@ -70,6 +69,7 @@ pub fn build(s: &App, width: f32, k: &Kit, layer: &mut Vec<El>) {
         Some(TabKind::Compare | TabKind::Render | TabKind::Single) => vec![PLAY, COMPARE],
         _ => vec![],
     };
+    order.push(PANE);
     order.push(GENERAL);
     for x in [PLAY, COMPARE, BOARD, PADS] {
         if !order.iter().any(|o| o.0 == x.0) {

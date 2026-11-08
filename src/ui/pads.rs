@@ -59,15 +59,25 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
 
 fn group(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El {
     let hidden = t.group_hidden(&g.key);
-    let mut head = row().w_full().gap(12.0).center_y().child(text(g.title().to_uppercase()).font(px::pixel(20.0)).color(if on { px::LED } else { px::SILK }));
-    if let Some(sub) = &g.subtitle {
-        head = head.child(text(sub.to_uppercase()).font(px::pixel(11.0)).color(px::FAINT));
+    // Same rule as the board's cards: a narrow group gives the verdict chip its own line.
+    let tight = width < 620.0;
+    let mut head = row()
+        .w_full()
+        .h(30.0)
+        .gap(12.0)
+        .center_y()
+        .child(text(g.title().to_uppercase()).font(px::pixel(20.0)).color(if on { px::LED } else { px::SILK }).truncate().shrink().min_w(80.0));
+    if let Some(sub) = g.subtitle.as_ref().filter(|_| width >= 520.0) {
+        head = head.child(text(sub.to_uppercase()).font(px::pixel(11.0)).color(px::FAINT).truncate().shrink());
     }
     head = head.child(spacer());
-    if let Some(ch) = g.chip.as_ref().filter(|_| !hidden) {
+    if let Some(ch) = g.chip.as_ref().filter(|_| !hidden && !tight) {
         head = head.child(board::chip(ch, k));
     }
     let mut out = col().key(format!("padgroup-{}", g.key)).w_full().gap(10.0).child(head);
+    if let Some(ch) = g.chip.as_ref().filter(|_| !hidden && tight) {
+        out = out.child(row().child(board::chip(ch, k)));
+    }
     let mut order = t.group_order(g);
     order.extend(g.members.len()..g.playable().len());
     let cols = (((width + GAP) / (PAD_MIN + GAP)).floor() as usize).clamp(1, order.len().max(1));
@@ -93,7 +103,8 @@ fn pad(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32,
     let active = focused && t.active == m;
     let playing = active && s.mixer_is_for(t.id()) && s.mixer.is_playing();
     let label = t.board_label(g, m);
-    let key_char = KEYS.chars().nth(pos).filter(|_| focused).map(|ch| ch.to_ascii_uppercase().to_string());
+    // Every pad shows its key; it plays from the keyboard once its group is the focused one.
+    let key_char = KEYS.chars().nth(pos).map(|ch| ch.to_ascii_uppercase().to_string());
 
     let mut top = row().w_full().gap(6.0).center_y().child(text(key_char.clone().unwrap_or_else(|| "·".into())).font(px::pixel(28.0)).color(if playing {
         px::AMBER
@@ -183,10 +194,11 @@ fn pad(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32,
                 px::LINE
             },
         )
+        .hover(if active { px::SELECTED } else { px::RAISED })
         .cursor(rune::Cursor::Pointer)
         .role("button")
         .label(format!("Play {label}"))
-        .help(match &key_char {
+        .help(match key_char.as_ref().filter(|_| focused) {
             Some(kc) => format!("Play {label} · {kc} · double-click sends it to the agent"),
             None => format!("Play {label} · double-click sends it to the agent"),
         })

@@ -67,7 +67,7 @@ pub fn header(key: &str, title_text: impl Into<String>, lamps: El, tools: El) ->
         .flex_wrap()
         .child(row().gap(18.0).items_end().min_w(0.0).shrink().child(title(title_text)).child(lamps.pb(6.0)))
         .child(rune::spacer())
-        .child(tools)
+        .child(tools.flex_wrap().min_w(0.0).shrink())
 }
 
 /// A readout: label above a pixel number.
@@ -85,8 +85,69 @@ pub fn key(label_text: impl Into<String>, on: bool) -> El {
         .radius(4.0)
         .fill(if on { LED } else { Color::TRANSPARENT })
         .border(1.0, if on { LED } else { GRILLE })
+        .hover(if on { LED } else { SELECTED })
         .cursor(rune::Cursor::Pointer)
         .child(text(label_text.into()).font(pixel(13.0)).color(if on { CASE } else { SOFT }))
+}
+
+/// A key that shows its keyboard shortcut after its label, dimmer: "REPLAY  R".
+pub fn key_k(label_text: impl Into<String>, shortcut: &str, on: bool) -> El {
+    row()
+        .h(28.0)
+        .px(9.0)
+        .gap(8.0)
+        .center()
+        .radius(4.0)
+        .fill(if on { LED } else { Color::TRANSPARENT })
+        .border(1.0, if on { LED } else { GRILLE })
+        .hover(if on { LED } else { SELECTED })
+        .cursor(rune::Cursor::Pointer)
+        .child(text(label_text.into()).font(pixel(12.0)).color(if on { CASE } else { SOFT }))
+        .child(text(shortcut.to_owned()).font(pixel(10.0)).color(if on { SILK } else { OFF }))
+}
+
+/// A square icon-sized button with a hover fill: the pane's dock and hide controls.
+pub fn icon_btn(glyph: El, on: bool) -> El {
+    row()
+        .size(30.0, 30.0)
+        .center()
+        .radius(5.0)
+        .fill(if on { SELECTED } else { Color::TRANSPARENT })
+        .border(1.0, if on { GRILLE_ON } else { Color::TRANSPARENT })
+        .hover(GRILLE)
+        .cursor(rune::Cursor::Pointer)
+        .child(glyph)
+}
+
+/// A section of the pane: a hairline above, its title (and anything on the right of it), then
+/// its body.
+pub fn section(key: &str, title_text: &str, trailing: Option<El>, body: El) -> El {
+    let mut head = row().w_full().h(20.0).center_y().gap(8.0).child(text(title_text.to_uppercase()).font(pixel(11.0)).color(FAINT));
+    if let Some(t) = trailing {
+        head = head.child(rune::spacer()).child(t);
+    }
+    rune::col().key(key.to_owned()).w_full().pt(14.0).pb(16.0).gap(10.0).border_sides([1.0, 0.0, 0.0, 0.0], LINE).child(head).child(body)
+}
+
+/// A quiet text button for a section's header: "ALL FIELDS ▸".
+pub fn link(label_text: impl Into<String>) -> El {
+    row().h(20.0).px(6.0).center().radius(3.0).hover(SELECTED).cursor(rune::Cursor::Pointer).child(text(label_text.into().to_uppercase()).font(pixel(10.0)).color(SILK))
+}
+
+/// One labelled row: a pixel name and a mono value that wraps, with a hairline under it.
+pub fn kv(name: &str, value: &str, last: bool) -> El {
+    let r = row()
+        .w_full()
+        .py(7.0)
+        .gap(12.0)
+        .child(text(name.to_uppercase()).font(pixel(10.0)).color(FAINT).w(84.0).pt(2.0).truncate().help_when_truncated(name.to_owned()))
+        .child(text(value.to_owned()).font(TextStyle::new(12.0, 400.0).mono().lh(18.0)).color(SOFT).wrap().grow(1.0).min_w(0.0).selectable(true));
+    if last { r } else { r.border_sides([0.0, 0.0, 1.0, 0.0], SELECTED) }
+}
+
+/// Equal-width keys joined into one control, the lit one being the current choice.
+pub fn segments(items: Vec<El>) -> El {
+    row().w_full().gap(4.0).children(items.into_iter().map(|e| e.grow(1.0).min_w(0.0)).collect::<Vec<_>>())
 }
 
 /// A small key for tight rows (the status bar, job rows).
@@ -99,6 +160,7 @@ pub fn key_sm(label_text: impl Into<String>, on: bool) -> El {
         .radius(3.0)
         .fill(if on { LED } else { Color::TRANSPARENT })
         .border(1.0, if on { LED } else { GRILLE })
+        .hover(if on { LED } else { SELECTED })
         .cursor(rune::Cursor::Pointer)
         .child(text(label_text.into().to_uppercase()).font(pixel(10.0)).color(if on { CASE } else { SOFT }))
 }
@@ -113,6 +175,7 @@ pub fn toggle(label_text: &str, on: bool) -> El {
         .radius(4.0)
         .fill(if on { SELECTED } else { Color::TRANSPARENT })
         .border(1.0, if on { GRILLE_ON } else { GRILLE })
+        .hover(SELECTED)
         .cursor(rune::Cursor::Pointer)
         .child(el().size(8.0, 8.0).fill(if on { LED } else { GRILLE_ON }))
         .child(text(label_text.to_uppercase()).font(pixel(11.0)).color(if on { LED } else { SILK }))
@@ -180,30 +243,27 @@ pub enum Dock {
     Hidden,
 }
 
-/// The three dock buttons in the pane's head.
-pub fn dock_buttons(s: &App) -> El {
-    let b = |d: Dock, glyph: El, help: &str| {
-        let on = s.pane == d;
-        row()
-            .key(format!("dock-{d:?}").to_lowercase())
-            .size(26.0, 26.0)
-            .center()
-            .radius(4.0)
-            .fill(if on { lin(0.01298, 0.01298, 0.01521) } else { Color::TRANSPARENT })
-            .cursor(rune::Cursor::Pointer)
-            .help(help.to_owned())
-            .child(glyph)
-            .on_press(move |s: &mut App| s.set_pane(d))
-    };
+/// The three dock buttons in the pane's head: dock left, dock right, hide.
+pub fn dock_buttons(s: &App, compact: bool) -> El {
     let side = |left: bool, on: bool| {
-        let ink = if on { SOFT } else { OFF };
-        let bar = el().w(4.0).h_full().fill(ink);
-        let frame = row().size(14.0, 12.0).radius(2.0).border(1.5, ink);
+        let ink = if on { LED } else { SILK };
+        let bar = el().w(5.0).h_full().fill(ink);
+        let frame = row().size(16.0, 13.0).radius(2.0).border(1.5, ink);
         if left { frame.child(bar) } else { frame.child(rune::spacer()).child(bar) }
     };
+    let b =
+        |d: Dock, glyph: El, help: &str| icon_btn(glyph, s.pane == d).key(format!("dock-{d:?}").to_lowercase()).help(help.to_owned()).on_press(move |s: &mut App| s.set_pane(d));
+    let close = icon_btn(text("×").font(pixel(18.0)).color(SOFT), false).key("dock-hidden").help("Hide the pane · \\").on_press(|s: &mut App| s.toggle_pane());
+    if compact {
+        // A narrow pane gets one button that moves it to the other side.
+        let (to, glyph, help) =
+            if s.pane == Dock::Left { (Dock::Right, side(false, false), "Move the pane right · ⌘]") } else { (Dock::Left, side(true, false), "Move the pane left · ⌘[") };
+        return row().gap(2.0).child(b(to, glyph, help)).child(el().w(1.0).h(18.0).fill(GRILLE).mx(3.0)).child(close);
+    }
     row()
         .gap(2.0)
-        .child(b(Dock::Left, side(true, s.pane == Dock::Left), "Dock the pane left"))
-        .child(b(Dock::Right, side(false, s.pane == Dock::Right), "Dock the pane right"))
-        .child(b(Dock::Hidden, text("×").font(pixel(13.0)).color(OFF), "Hide the pane · \\"))
+        .child(b(Dock::Left, side(true, s.pane == Dock::Left), "Dock the pane left · ⌘["))
+        .child(b(Dock::Right, side(false, s.pane == Dock::Right), "Dock the pane right · ⌘]"))
+        .child(el().w(1.0).h(18.0).fill(GRILLE).mx(4.0))
+        .child(close)
 }

@@ -575,6 +575,134 @@ mod tests {
         assert_eq!(rt.state.pane, crate::ui::px::Dock::Left, "dragged across, it docks left");
     }
 
+    /// Every keyed element's laid-out rect, outside the pane (which is allowed to change when
+    /// its subject does) and the transient overlays.
+    fn layout(rt: &mut Runtime<App>) -> std::collections::BTreeMap<String, [f32; 4]> {
+        for _ in 0..40 {
+            rt.frame(1.0 / 60.0);
+        }
+        rt.elements()
+            .into_iter()
+            .filter(|e| !e.exiting && !in_pane(&e.path) && !e.path.contains("toast") && !e.path.contains("tip"))
+            .filter_map(|e| e.key.map(|k| (format!("{k} @ {}", e.path.rsplit('/').nth(1).unwrap_or("")), e.target)))
+            .collect()
+    }
+
+    type Scene = fn(&mut App);
+
+    /// Inside the side pane (its own subject changes it) rather than the page beside it.
+    fn in_pane(path: &str) -> bool {
+        path.split('/').any(|seg| seg == "pane" || seg.starts_with("pane-") || seg == "pane-drop")
+    }
+
+    fn moved(a: &std::collections::BTreeMap<String, [f32; 4]>, b: &std::collections::BTreeMap<String, [f32; 4]>) -> Vec<String> {
+        a.iter().filter_map(|(k, r)| b.get(k).filter(|q| r.iter().zip(q.iter()).any(|(x, y)| (x - y).abs() > 0.5)).map(|q| format!("{k}: {r:?} -> {q:?}"))).collect()
+    }
+
+    /// The everyday actions (switching what you hear, focusing a group, the pane's section,
+    /// scores, hovering any control) never move anything on the page.
+    /// No control on any page runs off the window, from a small window to a normal one.
+    #[test]
+    fn no_control_runs_off_the_window() {
+        let scenes: Vec<(&str, Scene)> = vec![
+            ("single", single),
+            ("compare", compare),
+            ("blind", blind),
+            ("run", run),
+            ("board", board),
+            ("pads", pads),
+            ("diff", diff),
+            ("shared", shared),
+            ("activity", activity),
+        ];
+        let mut bad = Vec::new();
+        for (w, h) in [(760.0, 720.0), (1000.0, 700.0), (1280.0, 800.0)] {
+            for (name, scene) in &scenes {
+                let mut app = test_app();
+                scene(&mut app);
+                let mut rt = Runtime::new(app, crate::ui::view, (w, h), Env { system_dark: true, scale: 1.0 });
+                for _ in 0..40 {
+                    rt.frame(1.0 / 60.0);
+                }
+                for e in rt.elements() {
+                    let clickable = e.focusable || e.role == "button" || e.role == "tab";
+                    if clickable && !e.exiting && !e.inert && e.opacity > 0.01 && e.target[0] + e.target[2] > w + 0.5 {
+                        bad.push(format!("{name} @ {w}: {} ends at {:.0}", e.key.unwrap_or(e.path), e.target[0] + e.target[2]));
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "controls run off the window:\n{}", bad.join("\n"));
+    }
+
+    #[test]
+    fn everyday_actions_never_shift_the_page() {
+        type Act = (&'static str, Scene);
+        let cases: Vec<(&str, Scene, Vec<Act>)> = vec![
+            (
+                "compare",
+                compare,
+                vec![
+                    ("hear B", |s| s.set_active_member(1)),
+                    ("hear C", |s| s.set_active_member(2)),
+                    ("pane META", |s| s.pane_tab = "META".into()),
+                    ("pane NOTE", |s| s.pane_tab = "NOTE".into()),
+                    ("loop", |s| s.set_loop(Some((0.5, 1.5)))),
+                ],
+            ),
+            (
+                "board",
+                board,
+                vec![
+                    ("focus ui-click", |s| s.focus_group("ui-click")),
+                    ("focus whoosh", |s| s.focus_group("whoosh-soft")),
+                    ("play tile 2", |s| s.board_play("whoosh-soft", 1)),
+                    ("pane NOTE", |s| s.pane_tab = "NOTE".into()),
+                    ("keep", |s| s.decide_active("keep")),
+                ],
+            ),
+            ("pads", pads, vec![("play pad 2", |s| s.pad_play("whoosh-soft", 1)), ("score", |s| s.score_active(2))]),
+            ("single", single, vec![("score 2", |s| s.score(2)), ("pane EARSHOT", |s| s.pane_tab = "EARSHOT".into())]),
+            ("blind", blind, vec![("hear B", |s| s.set_active_member(1))]),
+            ("run", run, vec![]),
+            ("diff", diff, vec![]),
+            ("shared", shared, vec![]),
+            ("activity", activity, vec![]),
+            ("empty", empty, vec![]),
+        ];
+        let mut bad = Vec::new();
+        let mut hovered = Vec::new();
+        for (name, scene, acts) in cases {
+            for (what, act) in acts {
+                let mut rt = rt(scene);
+                let before = layout(&mut rt);
+                act(&mut rt.state);
+                rt.invalidate();
+                let after = layout(&mut rt);
+                for m in moved(&before, &after) {
+                    bad.push(format!("{name} / {what}: {m}"));
+                }
+            }
+            // Hovering any control.
+            let mut rt = rt(scene);
+            let before = layout(&mut rt);
+            let keys: Vec<String> =
+                rt.elements().into_iter().filter(|e| (e.focusable || e.role == "button" || e.role == "tab") && !e.inert && !in_pane(&e.path)).filter_map(|e| e.key).collect();
+            hovered.push(format!("{name}: {}", keys.len()));
+            for key in keys {
+                if let Some((x, y)) = rt.find(&key) {
+                    rt.pointer_move(x, y);
+                    let after = layout(&mut rt);
+                    for m in moved(&before, &after) {
+                        bad.push(format!("{name} / hover {key}: {m}"));
+                    }
+                }
+            }
+        }
+        assert!(hovered.len() >= 10, "the hover sweep found too few controls: {hovered:?}");
+        assert!(bad.is_empty(), "the page shifted:\n{}", bad.join("\n"));
+    }
+
     #[test]
     fn space_plays_whatever_was_clicked_last() {
         let space = || rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() };

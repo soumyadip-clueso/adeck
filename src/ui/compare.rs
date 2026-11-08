@@ -15,7 +15,7 @@ const GAP: f32 = 4.0;
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let hidden = t.is_blind_hidden();
-    let narrow = width < 620.0;
+    let narrow = width < 420.0;
     let strip_w = width - LETTER_W - GAP;
 
     let title = t.spec.label.clone().unwrap_or_else(|| if hidden { format!("Blind ×{}", t.spec.items.len()) } else { "Compare".into() });
@@ -53,11 +53,11 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .key("compare-head")
         .w_full()
         .gap(16.0)
-        .items_end()
+        .items_start()
         .flex_wrap()
         .child(col().gap(6.0).min_w(0.0).shrink().child(px::title(title)).child(text(sub).font(rune::TextStyle::new(13.0, 400.0)).color(px::SILK).truncate()))
         .child(spacer())
-        .child(toggles);
+        .child(toggles.pt(2.0));
 
     let mut page = widgets::page("compare", width).gap(16.0).child(head);
     if t.spec.items.is_empty() {
