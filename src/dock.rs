@@ -25,9 +25,8 @@ const FPS: f32 = 12.0;
 const LIVE_PX: u32 = 128;
 /// Seconds for the mark to dissolve into the meter, or settle back.
 const FADE: f32 = 0.45;
-// The tile at 1024: a rounded square with a lighter top half.
+// The tile at 1024: a flat rounded square.
 const TILE: (f32, f32, f32) = (100.0, 924.0, 178.0);
-const TOP_END: f32 = 495.0;
 const INK: (u8, u8, u8) = (0xf2, 0xf2, 0xf2);
 
 /// The mark: a lowercase a.
@@ -169,7 +168,6 @@ pub fn draw_grid(g: &[[f32; N]; N], size: u32) -> Pixmap {
     let tf = Transform::from_scale(s, s);
     let (lo, hi, r) = TILE;
     fill(&mut pm, rounded(lo, lo, hi, hi, r), (0x14, 0x14, 0x15), 1.0, tf);
-    fill(&mut pm, rounded(lo, lo, hi, TOP_END, r), (0x1c, 0x1c, 0x1e), 1.0, tf);
     for (y, row) in g.iter().enumerate() {
         for (x, &a) in row.iter().enumerate() {
             let (cx, cy) = (512.0 + (x as f32 - 4.0) * 68.0, 512.0 + (y as f32 - 4.0) * 68.0);
