@@ -108,7 +108,7 @@ pub struct Tab {
     pub zoom_sound: bool,
     pub move_open: bool,
     /// Pads: show the focused group's waveform, spectrogram and target bars.
-    pub pads_detail: bool,
+    pub sheet_open: bool,
     /// The stretch of time the strips show, when zoomed in; `None` fits the whole file.
     pub view: Option<(f64, f64)>,
     /// Strip height, as a multiple of each strip's own.
@@ -122,6 +122,7 @@ pub struct Tab {
 impl Tab {
     pub fn new(spec: TabSpec) -> Tab {
         let spec_kind = spec.kind;
+        let sheet = spec.board.as_ref().is_some_and(|b| !b.is_pads());
         let filter = TextEdit::new(spec.filter.clone().unwrap_or_default());
         Tab {
             spec,
@@ -140,7 +141,7 @@ impl Tab {
             details_open: false,
             zoom_sound: true,
             move_open: false,
-            pads_detail: false,
+            sheet_open: sheet,
             view: None,
             strip_h: 1.0,
             note_open: spec_kind == TabKind::Run,
@@ -295,6 +296,8 @@ pub struct App {
     /// The new-tab menu, and the runs it offers (listed when it opens).
     pub new_menu: bool,
     pub menu_runs: Vec<String>,
+    /// The detail sheet's width, kept across tabs.
+    pub sheet_w: f32,
     dirty: bool,
     pub headless: bool,
 }
@@ -337,6 +340,7 @@ impl App {
             toast: cfg_error.map(|e| (e, true)),
             new_menu: false,
             menu_runs: Vec::new(),
+            sheet_w: 480.0,
             dirty: false,
             headless,
         };
@@ -885,6 +889,7 @@ impl App {
         let kind = if diff.is_some() { TabKind::Diff } else { TabKind::Board };
         let id = self.open(kind, Vec::new(), label, blind, loudness_match, None, None);
         if let Some(t) = self.tab_mut(id) {
+            t.sheet_open = board.as_ref().is_some_and(|b| !b.is_pads());
             t.spec.board = board;
             t.spec.diff = diff;
         }
@@ -953,6 +958,9 @@ impl App {
     /// playing switches at the same moment, a press on the one playing starts it again.
     pub fn board_play(&mut self, key: &str, idx: usize) {
         self.focus_group(key);
+        if let Some(t) = self.current_mut() {
+            t.sheet_open = true;
+        }
         let Some(t) = self.current() else { return };
         if idx >= t.spec.items.len() {
             return;
@@ -1387,6 +1395,12 @@ impl App {
 
     pub fn set_volume(&mut self, v: f32) {
         self.mixer.set_volume(v);
+    }
+
+    pub fn toggle_sheet(&mut self) {
+        if let Some(t) = self.current_mut() {
+            t.sheet_open ^= true;
+        }
     }
 
     pub fn toggle_note(&mut self) {

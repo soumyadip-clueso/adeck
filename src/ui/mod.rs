@@ -4,6 +4,7 @@ pub mod board;
 pub mod compare;
 pub mod diff;
 pub mod pads;
+pub mod sheet;
 pub mod icons;
 pub mod render;
 pub mod run;
@@ -36,8 +37,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             TabKind::Compare => compare::build(s, t, width, k),
             TabKind::Render => render::build(s, t, width, k),
             TabKind::Run => run::build(s, t, k),
-            TabKind::Board if t.board().is_some_and(crate::board::Board::is_pads) => pads::build(s, t, width, k),
-            TabKind::Board => board::build(s, t, width, k),
+            TabKind::Board => {
+                let main_w = sheet::main_width(s, t, width);
+                let main = if t.board().is_some_and(crate::board::Board::is_pads) { pads::build(s, t, main_w, k) } else { board::build(s, t, main_w, k) };
+                sheet::wrap(s, t, main, width, k)
+            }
             TabKind::Diff => diff::build(s, t, width, k),
         },
     };
@@ -352,7 +356,13 @@ fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
         rune::Key::Left => s.board_step_member(-1),
         rune::Key::Right => s.board_step_member(1),
         rune::Key::Enter => s.board_pick(),
-        rune::Key::Escape => s.set_loop(None),
+        rune::Key::Escape => {
+            if s.current().is_some_and(|t| t.loop_secs.is_some()) {
+                s.set_loop(None);
+            } else {
+                s.toggle_sheet();
+            }
+        }
         rune::Key::Text(ch) if ch.chars().count() == 1 => {
             let d = ch.chars().next().unwrap_or(' ').to_ascii_lowercase();
             match d {

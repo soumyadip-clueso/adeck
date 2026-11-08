@@ -92,7 +92,19 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
     }
     if !on {
         let k2 = key.clone();
-        head = head.child(Button::new("Open").variant(ButtonVariant::Ghost).control_size(ControlSize::Small).on_press(move |s: &mut App| s.focus_group(&k2)).build(k).key(format!("open-{key}")));
+        head = head.child(
+            Button::new("Open")
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press(move |s: &mut App| {
+                    s.focus_group(&k2);
+                    if let Some(t) = s.current_mut() {
+                        t.sheet_open = true;
+                    }
+                })
+                .build(k)
+                .key(format!("open-{key}")),
+        );
     }
     let mut card = col()
         .key(format!("group-{key}"))
@@ -125,7 +137,7 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
     if let Some(n) = &g.note {
         card = card.child(rune_kit::Markdown::new(n.clone()).build(k));
     }
-    card.child(detail(s, t, g, inner, k))
+    card
 }
 
 /// One member: click anywhere on it to play it.

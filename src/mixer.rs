@@ -67,6 +67,8 @@ pub struct Mixer {
     pending: Option<(u64, Paths)>,
     /// Output volume, 0 to 1.5 (linear).
     pub volume: f32,
+    /// A seek asked for while the files were still decoding, in seconds, applied once they land.
+    pending_seek: Option<f64>,
 }
 
 impl Default for Mixer {
@@ -88,6 +90,7 @@ impl Default for Mixer {
             waker: None,
             pending: None,
             volume: 1.0,
+            pending_seek: None,
         }
     }
 }
@@ -155,6 +158,7 @@ impl Mixer {
         self.next_set += 1;
         self.loaded = Some((owner, ids));
         self.want_play = false;
+        self.pending_seek = None;
         self.frames = 0;
         self.active = 0;
         self.loop_frames = None;
@@ -237,6 +241,9 @@ impl Mixer {
     }
 
     pub fn secs(&self) -> f64 {
+        if let Some(p) = self.pending_seek {
+            return p;
+        }
         self.position() as f64 / f64::from(self.rate)
     }
 
@@ -245,6 +252,11 @@ impl Mixer {
     }
 
     pub fn seek_secs(&mut self, s: f64) {
+        // Before the files have decoded there's no length to clamp to: hold the seek.
+        if self.frames == 0 {
+            self.pending_seek = Some(s.max(0.0));
+            return;
+        }
         self.seek_frames((s.max(0.0) * f64::from(self.rate)) as u64);
     }
 
@@ -305,6 +317,9 @@ impl Mixer {
                     self.error = None;
                     self.send(Cmd::Load { set, tracks });
                     self.send(Cmd::Active(self.active));
+                    if let Some(p) = self.pending_seek.take() {
+                        self.seek_secs(p);
+                    }
                     if self.want_play {
                         self.play();
                     }

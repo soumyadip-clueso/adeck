@@ -33,3 +33,11 @@ snaps:
 lint:
     cargo clippy --all-targets -- -D warnings
     cargo fmt --check
+
+# Build a release and install it as ~/Applications/adeck.app (run again to update)
+install:
+    scripts/install
+
+# Free the dev build (keeps the release build and the dependency cache)
+clean-dev:
+    rm -rf target/debug target/snap-cache target/hot.json target/hot.png

@@ -365,7 +365,17 @@ mod tests {
         for _ in 0..20 {
             rt.frame(1.0 / 60.0);
         }
-        for key in ["tile-whoosh-soft-0", "tile-whoosh-soft-2", "analysis", "details", "board-head"] {
+        // Narrow: the sheet takes the page, and closing it shows the tiles.
+        for key in ["sheet", "analysis", "details", "bwave"] {
+            let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key}"));
+            assert!(r[0] >= 0.0 && r[0] + r[2] <= 390.5, "{key} spills: {r:?}");
+        }
+        rt.state.toggle_sheet();
+        rt.invalidate();
+        for _ in 0..20 {
+            rt.frame(1.0 / 60.0);
+        }
+        for key in ["tile-whoosh-soft-0", "tile-whoosh-soft-2", "board-head"] {
             let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key}"));
             assert!(r[0] >= 0.0 && r[0] + r[2] <= 390.5, "{key} spills: {r:?}");
         }
@@ -458,10 +468,30 @@ mod tests {
         let files = ids(&["tick", "tone-a"]);
         let v = rt.state.call("open_pads", &serde_json::json!({"items": files, "label": "Clicks"})).unwrap();
         assert_eq!(v["board"]["groups"], 1);
-        rt.state.current_mut().unwrap().pads_detail = true;
+        rt.state.current_mut().unwrap().sheet_open = true;
         rt.invalidate();
         rt.frame(1.0 / 60.0);
         assert!(rt.find("pad-pads-1").is_some() && rt.find("bwave").is_some());
+    }
+
+    #[test]
+    fn dragging_across_the_waveform_scrubs() {
+        let mut rt = rt(single);
+        let (x, y) = rt.find("wave").expect("wave");
+        let ([sx, _, sw, _], _) = rt.presented("wave").unwrap();
+        rt.pointer_down(sx + sw * 0.2, y);
+        rt.frame(1.0 / 60.0);
+        let at_down = rt.state.mixer.secs();
+        rt.pointer_move(sx + sw * 0.5, y);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_move(sx + sw * 0.7, y);
+        rt.frame(1.0 / 60.0);
+        let mid = rt.state.mixer.secs();
+        rt.pointer_up(sx + sw * 0.7, y);
+        rt.frame(1.0 / 60.0);
+        eprintln!("down {at_down} mid {mid} end {} x {x}", rt.state.mixer.secs());
+        assert!((at_down - 2.0).abs() < 0.3, "press lands at 20%: {at_down}");
+        assert!((mid - 7.0).abs() < 0.3, "drag follows: {mid}");
     }
 
     #[test]

@@ -43,13 +43,9 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .child(Switch::new(t.spec.blind).label("Blind").on_toggle(|s: &mut App| s.toggle_blind()).build(k).key("blind"))
         .child(Switch::new(t.spec.loudness_match).label("Match loudness").on_toggle(|s: &mut App| s.toggle_loudness_match()).build(k).key("match"))
         .child(
-            Switch::new(t.pads_detail)
+            Switch::new(t.sheet_open)
                 .label("Waveforms")
-                .on_toggle(|s: &mut App| {
-                    if let Some(t) = s.current_mut() {
-                        t.pads_detail ^= true;
-                    }
-                })
+                .on_toggle(|s: &mut App| s.toggle_sheet())
                 .build(k)
                 .key("pads-detail")
                 .help("Show the waveform, spectrogram and target bars for the pad you played"),
@@ -111,9 +107,7 @@ fn group(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El {
         }
         out = out.child(line);
     }
-    if on && t.pads_detail {
-        out = out.child(col().w_full().px(12.0).py(12.0).radius(k.radius.lg).fill(c.layer_01).child(board::detail(s, t, g, width - 24.0, k)));
-    }
+    let _ = on;
     out
 }
 
