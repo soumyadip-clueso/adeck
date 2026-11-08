@@ -1,30 +1,47 @@
 [package]
-name = "sleeve"
+name = "adeck"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-2.0-or-later"
-description = "A fast, good-looking app for your rekordbox library."
-repository = "https://github.com/alii/sleeve"
+description = "A listening bench for generated audio: tabs an LLM opens over MCP, A/B/N compares, verdicts on disk."
+repository = "https://github.com/soumyadip-clueso/adeck"
+
+[[bin]]
+name = "adeck"
+path = "src/main.rs"
+
+[features]
+# Live editing through scripts/rune-hot (subsecond). Off in normal builds.
+hot = ["rune/hot"]
 
 [dependencies]
-rune = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69", features = ["native-file-dialog"] }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
-rbl-core = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-db = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-index = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-anlz = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-audio = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "a7f276c3630f85a06a0230295da4d2bd172d8d3b", features = ["native-file-dialog"] }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "a7f276c3630f85a06a0230295da4d2bd172d8d3b" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "a7f276c3630f85a06a0230295da4d2bd172d8d3b", features = ["markdown"] }
 rbl-analysis = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-export = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-devices = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-deck = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
 
+cpal = "0.18"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "alac", "isomp4", "flac", "wav", "aiff", "pcm", "adpcm", "ogg", "vorbis"] }
+rubato = "0.16"
+realfft = "3"
+tiny-skia = "0.11"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "0.8"
+tiny_http = "0.12"
+base64 = "0.22"
 
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies build optimised once: decoding, FFTs and the GPU stack are unusable at opt 0.
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.release]
 lto = "thin"

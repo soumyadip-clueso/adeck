@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Move every rune crate to one new commit, then prove nothing broke.
+#   scripts/bump-rune          # the tip of anomalyco/rune's default branch
+#   scripts/bump-rune <sha>    # a specific commit
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+old=$(grep -m1 -o 'anomalyco/rune", rev = "[0-9a-f]*' Cargo.toml | sed 's/.*rev = "//')
+new=${1:-$(git ls-remote https://github.com/anomalyco/rune HEAD | cut -f1)}
+if [ "$old" = "$new" ]; then
+    echo "rune is already at $new"
+    exit 0
+fi
+echo "rune $old -> $new"
+echo "changes: https://github.com/anomalyco/rune/compare/$old...$new"
+
+sed -i '' "s/$old/$new/g" Cargo.toml
+cargo update -p rune -p rune-kit -p rune-theme-opencode
+cargo clippy --all-targets -- -D warnings
+cargo nextest run
+just snaps
+echo
+echo "Built and tested on rune $new. Look over target/snaps/, then commit Cargo.toml + Cargo.lock."
+echo "To undo: git checkout Cargo.toml Cargo.lock"

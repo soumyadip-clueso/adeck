@@ -1,289 +1,509 @@
-//! The window.
+//! The window: tabs along the titlebar, the front tab's content, and the footer.
 
-pub mod deck;
+pub mod board;
+pub mod compare;
+pub mod diff;
 pub mod icons;
-pub mod inspector;
-pub mod menus;
-pub mod sidebar;
+pub mod keys;
+pub mod pads;
+pub mod palette;
+pub mod pane;
+pub mod player;
+pub mod px;
+pub mod render;
+pub mod run;
+pub mod shared;
+pub mod single;
 pub mod statusbar;
-pub mod tracks;
+pub mod widgets;
 
-use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
-use rune_kit::shell::{self, PaneMotion, SidebarToggle, SplitView, Toolbar};
-use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit, TextInput};
+use rune::{Cx, El, KeyEvent, Tx, col, row, text};
+use rune_kit::shell::{TabItem, TabOrientation, TabStrip, WindowTitlebar};
+use rune_kit::{Kit, Toast};
 
-use crate::app::{App, DropTarget, LibState};
-use crate::library::Browse;
+use crate::app::{App, TabKind};
 
-pub fn kit(dark: bool) -> &'static Kit {
-    rune_theme_opencode::kit(dark)
+/// adeck's kit. It's always the dark sampler look; `_dark` stays for callers that pass the
+/// system appearance.
+pub fn kit(_dark: bool) -> &'static Kit {
+    px::kit()
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let k = kit(cx.system_dark());
-    let c = &k.c;
-
-    let main: El = match &s.lib {
-        LibState::Loading => centred(text("Opening your library…").font(k.ty.ui).color(c.text_muted)),
-        LibState::Failed(e) => centred(
-            col()
-                .gap(6.0)
-                .items_center()
-                .max_w(420.0)
-                .child(rune::icon(&icons::WARNING, 20.0).color(c.danger.icon))
-                .child(text(e.clone()).font(k.ty.ui).color(c.text_base).wrap().align(rune::Align::Center)),
-        ),
-        LibState::Ready(_) if s.rows.is_empty() => empty(s, k),
-        LibState::Ready(_) => tracks::build(s, cx.layout_size("tracks-area").map_or(1200.0, |z| z[0]), k),
-    };
-    // The panel's width, read off the footer, which always spans it.
-    let panel_w = cx.layout_size("statusbar").map_or(740.0, |z| z[0]);
-    let mut main_col = col().key("main").w_full().h_full().min_h(0.0);
-    if let Some(d) = deck::build(s, panel_w, k) {
-        main_col = main_col.child(d);
-    }
-    // The status bar is the panel's footer, inside its frame, lined up with the list.
-    let mut main = main_col.child(main);
-    if let Some(a) = statusbar::activity(s, k) {
-        main = main.child(a);
-    }
-    let main = main.child(statusbar::build(s, panel_w, k));
-
-    let search = TextInput::new(&s.search)
-        .placeholder("Search")
-        .leading_icon(&icons::SEARCH)
-        .width(Some(if panel_w < 760.0 { 160.0 } else { 240.0 }))
-        .clear_button()
-        .on_edit(|s: &mut App| &mut s.search)
-        .on_change(|s: &mut App, _| s.refresh_rows())
-        .build(k)
-        .key("search");
-    let inspector_toggle = IconButton::new(&shell::INSPECTOR)
-        .variant(IconButtonVariant::GhostMuted)
-        .expanded(s.inspector.is_open())
-        .label(if s.inspector.is_open() { "Hide details" } else { "Show details" })
-        .on_press(|s: &mut App| s.inspector.toggle())
-        .build(k)
-        .key("inspector-toggle");
-    let n = s.analyse_rows().len();
-    let fresh = s.selected_rows().is_empty();
-    let analyse = Button::new(match (n, fresh) {
-        (0, true) => "All analysed".to_owned(),
-        (0, false) => "Analyse".to_owned(),
-        (1, true) => "Analyse 1 new".to_owned(),
-        (n, true) => format!("Analyse {n} new"),
-        (1, false) => "Analyse 1 track".to_owned(),
-        (n, false) => format!("Analyse {n} tracks"),
-    })
-    .icon(&icons::WAVE)
-    .variant(ButtonVariant::Ghost)
-    .rolling("analyse-label")
-    .disabled(n == 0)
-    .help(if fresh { "Analyse the tracks here that have never been analysed" } else { "Analyse the selected tracks again, replacing their grids" })
-    .on_press(|s: &mut App| s.analyse())
-    .build(k)
-    .key("analyse");
-    let heading = text(title(s)).key("toolbar-title").font(k.ty.body_medium).color(c.text_base).truncate().shrink();
-    let toolbar = Toolbar::new()
-        .leading(heading)
-        .trailing(row().gap(8.0).center_y().child(analyse).child(search).child(inspector_toggle));
-
-    let split = SplitView::new(main)
-        .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar::build(s, k))
-        .inspector(&s.inspector, |s: &mut App| &mut s.inspector, inspector::build(s, cx.layout_size("insp-wave-strip"), k))
-        .toolbar(toolbar)
-        .titlebar_inset(cx.titlebar_inset())
-        .frame_inset(8.0)
-        .toolbar_in_panel()
-        .sidebar_padding(8.0, 8.0)
-        .sidebar_toggle(SidebarToggle::new().size(ControlSize::Large).past_lights(16.0).edge(18.0).gap(4.0).in_header())
-        .pane_motion(PaneMotion::new().spring(Spring::new(0.3, 0.0)).scale_with_width(480.0, 0.15, 0.3).fade_tail(0.15))
-        .reduced_motion(cx.is_reduced_motion())
-        .build(k);
-
-    let mut root = col().w_full().h_full().fill(c.page).child(split);
-    if s.drop_over == Some(DropTarget::Library) {
-        root = root.child(drop_veil(s, k));
-    }
     let mut layer = Vec::new();
-    confirm(s, k, &mut layer);
-    root = root.children(layer);
-    // Songs and folders dragged in from Finder land anywhere in the window.
-    root.on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), s.drop_playlist()))
-        .accepts_files(crate::import::accepts)
-        .on_drop_hover(|s: &mut App, over, _| s.drop_over = over.then_some(DropTarget::Library))
-}
-
-/// The question before anything is deleted: what goes, what stays, and a red button.
-fn confirm(s: &App, k: &Kit, layer: &mut Vec<El>) {
-    use crate::edits::{Confirm, songs};
-    let Some(ask) = &s.confirm else { return };
-    let (title, about, verb) = match ask {
-        Confirm::DeletePlaylist(id) => {
-            let node = s.tree.iter().find(|n| n.id == *id);
-            let name = node.map_or("this playlist", |n| n.name.as_str());
-            let folder = node.is_some_and(|n| n.kind == crate::library::PlaylistKind::Folder);
-            if folder {
-                (format!("Delete the folder “{name}”?"), "Everything inside it goes too. The songs stay in your library.".to_owned(), "Delete folder")
+    let titlebar = titlebar(s, cx, k, &mut layer);
+    let full_w = cx.layout_size("body").map_or(1280.0, |z| z[0]);
+    let body = match s.current() {
+        None => empty(s, k),
+        Some(t) => {
+            let width = full_w - pane::taken(s, t, full_w) - 2.0 * PAGE_X;
+            let page = match t.spec.kind {
+                TabKind::Single => single::build(s, t, width, k),
+                TabKind::Compare => compare::build(s, t, width, k),
+                TabKind::Render => render::build(s, t, width, k),
+                TabKind::Run => run::build(s, t, width, k),
+                TabKind::Board if t.board().is_some_and(crate::board::Board::is_pads) => pads::build(s, t, width, k),
+                TabKind::Board => board::build(s, t, width, k),
+                TabKind::Diff => diff::build(s, t, width, k),
+                TabKind::Shared => shared::build(s, t, width, k),
+            };
+            // Narrow windows scroll the whole page rather than squeezing the strips.
+            let page = if width < 620.0 && matches!(t.spec.kind, TabKind::Single | TabKind::Compare | TabKind::Render) {
+                col().key("narrow-scroll").w_full().h_full().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(page)
             } else {
-                (format!("Delete “{name}”?"), "The songs in it stay in your library.".to_owned(), "Delete playlist")
-            }
+                page
+            };
+            let page = col().key("page").grow(1.0).min_w(0.0).h_full().min_h(0.0).px(PAGE_X).pt(14.0).pb(14.0).child(page);
+            pane::wrap(s, t, page, full_w, k)
         }
-        Confirm::RemoveTracks(ids) => (
-            format!("Remove {} from your library?", songs(ids.len())),
-            "They come out of every playlist too, and lose their cues and analysis. The files stay where they are on your Mac.".to_owned(),
-            "Remove",
-        ),
     };
-    let ask = ask.clone();
-    let buttons = row()
-        .w_full()
-        .gap(8.0)
-        .px(16.0)
-        .pb(16.0)
-        .justify_end()
-        .child(Button::new("Cancel").variant(ButtonVariant::Outline).on_press(|s: &mut App| s.confirm = None).build(k).key("confirm-cancel"))
-        .child(
-            Button::new(verb)
-                .variant(ButtonVariant::Danger)
-                .on_press(move |s: &mut App| match &ask {
-                    crate::edits::Confirm::DeletePlaylist(id) => s.delete_playlist(*id),
-                    crate::edits::Confirm::RemoveTracks(ids) => s.remove_from_library(ids.clone()),
-                })
-                .build(k)
-                .key("confirm-ok"),
-        );
-    Dialog::new("confirm", title).description(about).width(420.0).fit().open(true).on_close(|s: &mut App| s.confirm = None).child(buttons).build(k, layer);
+    if let Some([w, h]) = cx.layout_size("root") {
+        s.win.set((w, h, cx.system_dark()));
+    }
+    let mut root = col().key("root").w_full().h_full().fill(px::CASE).child(titlebar).child(col().key("body").w_full().grow(1.0).min_h(0.0).child(body));
+    if let Some(a) = statusbar::activity(s, k) {
+        root = root.child(a);
+    }
+    if statusbar::visible(s) {
+        root = root.child(statusbar::build(s, full_w, k));
+    }
+    if let Some(t) = s.current().filter(|t| player::has_player(t)) {
+        root = root.child(player::build(s, t, full_w, k));
+    }
+    s.toast_shown();
+    if let Some((msg, err)) = &s.toast {
+        // Above the player; click it or its × to dismiss (it also clears itself after a few seconds).
+        let t = Toast::new("toast", msg.clone())
+            .icon(k, if *err { &icons::WARNING } else { &icons::CHECK })
+            .on_close(|s: &mut App| s.toast = None)
+            .build(k)
+            .cursor(rune::Cursor::Pointer)
+            .on_press(|s: &mut App| s.toast = None);
+        layer.push(col().key("toast-region").pin(None, None, Some(20.0), Some(84.0)).child(t));
+    }
+    keys::build(s, full_w, k, &mut layer);
+    palette::build(s, full_w, k, &mut layer);
+    root.children(layer).on_drop_files(|s: &mut App, files, _| s.open_files(files.to_vec())).accepts_files(|p: &std::path::Path| crate::item::media_of(p).is_some() || p.is_dir())
 }
 
-/// What a drag over the window shows: the window tinted, and where the songs will go.
-fn drop_veil(s: &App, k: &Kit) -> El {
-    let c = &k.c;
-    let target = s.drop_playlist().and_then(|id| s.tree.iter().find(|n| n.id == id)).map(|n| n.name.clone());
-    let headline = match &target {
-        Some(name) => format!("Add to {name}"),
-        None => "Add to your library".to_owned(),
-    };
-    let card = col()
-        .gap(6.0)
-        .items_center()
-        .px(28.0)
-        .py(22.0)
-        .radius(14.0)
-        .fill(c.layer_01)
-        .border(1.0, c.border_base)
-        .shadow(12.0, 32.0, rune::Color::BLACK.alpha(0.3))
-        .child(rune::icon(&icons::DROP, 28.0).color(c.icon_accent))
-        .child(text(headline).font(k.ty.body_medium).color(c.text_base))
-        .child(text("Drop songs or folders. They'll be analysed straight away.").font(k.ty.small).color(c.text_muted));
-    el().key("drop-veil")
-        .absolute(0.0, 0.0)
-        .w_full()
-        .h_full()
-        .px(10.0)
-        .py(10.0)
-        .inert()
-        .transition(rune::Transition::opacity())
-        .fill(c.page.alpha(0.45))
-        .child(col().w_full().h_full().radius(16.0).fill(c.icon_accent.alpha(0.1)).border(2.0, c.icon_accent.alpha(0.7)).center().child(card))
+/// The page's side padding.
+pub const PAGE_X: f32 = 28.0;
+
+fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
+    let items: Vec<TabItem<'_, App>> = s
+        .tabs
+        .iter()
+        .map(|t| {
+            let icon = match t.spec.kind {
+                TabKind::Single => &icons::WAVE,
+                TabKind::Compare => &icons::COMPARE,
+                TabKind::Render => &icons::FILM,
+                TabKind::Run => &icons::TABLE,
+                TabKind::Board => &icons::BOARD,
+                TabKind::Diff => &icons::DIFF,
+                TabKind::Shared => &icons::SHARE,
+            };
+            TabItem::new(t.id().to_string(), tab_title(s, t)).icon(icon)
+        })
+        .collect();
+    let active = s.active.map(|a| a.to_string());
+    let strip = TabStrip::new("tabs", TabOrientation::Horizontal)
+        .tabs(items)
+        .active(active.as_deref())
+        .viewport_width(cx.layout_size("tabs").map(|z| z[0]))
+        .drag_state(&s.tab_drag, |s: &mut App| &mut s.tab_drag)
+        .close_icon(&icons::CLOSE)
+        .on_select(|s: &mut App, id: &str, _tx: &mut Tx| {
+            if let Ok(id) = id.parse() {
+                s.focus(id);
+            }
+        })
+        .on_close(|s: &mut App, id: &str, _tx: &mut Tx| {
+            if let Ok(id) = id.parse() {
+                s.close(id);
+            }
+        })
+        .on_reorder(|s: &mut App, r, _tx: &mut Tx| s.reorder(&r.id, r.to))
+        .trailing_action(new_menu(s, k, layer))
+        .build_layered(k, layer);
+    // The agent's connection only shows when it's down.
+    let mut trailing = row().gap(14.0).center_y().pr(4.0);
+    if s.calls.is_none() {
+        trailing = trailing.child(px::lamp("MCP OFF", px::BAD).key("mcp-status").help(s.mcp_status.clone()));
+    }
+    WindowTitlebar::from_insets(cx.chrome_insets(), 1.0).tabs(strip).trailing(trailing).build(k)
 }
 
-fn title(s: &App) -> String {
-    match (s.browse, s.loaded()) {
-        (Browse::Collection, _) => "Collection".into(),
-        (Browse::Playlist(id), Some(_)) => s.tree.iter().find(|n| n.id == id).map_or_else(String::new, |n| n.name.clone()),
-        _ => String::new(),
+pub fn tab_title(s: &App, t: &crate::app::Tab) -> String {
+    if let Some(l) = &t.spec.label {
+        return l.clone();
+    }
+    match t.spec.kind {
+        TabKind::Run => t.spec.run.clone().unwrap_or_else(|| "Run".into()),
+        TabKind::Board => "Board".into(),
+        TabKind::Diff => t.spec.diff.as_ref().map_or_else(|| "Diff".into(), |d| format!("{} vs {}", d.a, d.b)),
+        _ if t.is_blind_hidden() => format!("Blind ×{}", t.spec.items.len()),
+        TabKind::Compare | TabKind::Render if t.spec.items.len() > 1 => {
+            format!("{} ×{}", short(s, &t.spec.items[0]), t.spec.items.len())
+        }
+        _ => t.spec.items.first().map_or_else(|| "Empty".into(), |i| short(s, i)),
     }
 }
 
-/// What an empty list says instead: why it's empty, and how to fill it.
-fn empty(s: &App, k: &Kit) -> El {
-    let c = &k.c;
-    let searching = !s.search.text.trim().is_empty();
-    let (head, tip) = match s.browse {
-        _ if searching => ("Nothing matches your search".to_owned(), "Try fewer words, or clear the search.".to_owned()),
-        Browse::Playlist(_) if s.drop_playlist().is_some() => ("This playlist is empty".to_owned(), "Drag songs here from Finder, or right-click songs in your collection and choose Add to.".to_owned()),
-        Browse::Playlist(_) => ("Nothing in here yet".to_owned(), String::new()),
-        Browse::Collection => ("Your library is empty".to_owned(), "Drag songs or folders here from Finder to add them.".to_owned()),
-    };
-    centred(
-        col()
-            .key("empty")
-            .gap(6.0)
-            .items_center()
-            .max_w(360.0)
-            .child(rune::icon(&icons::DROP, 22.0).color(c.icon_faint))
-            .child(text(head).font(k.ty.ui_medium).color(c.text_base))
-            .child(text(tip).font(k.ty.small).color(c.text_muted).wrap().align(rune::Align::Center)),
-    )
+fn short(s: &App, id: &str) -> String {
+    s.entry(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |e| e.item.name.clone())
 }
 
-fn centred(e: El) -> El {
-    col().w_full().grow(1.0).min_h(0.0).center().child(e)
+/// `/`: into the tab's search box, on tabs that have one.
+pub fn focus_search(s: &mut App) -> bool {
+    let Some(t) = s.current_mut().filter(|t| matches!(t.spec.kind, TabKind::Board | TabKind::Run | TabKind::Shared)) else { return false };
+    t.filter.focused = true;
+    true
+}
+
+/// The "+" after the tabs: open a file or folder, a new compare, or a run.
+fn new_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    let plus = rune_kit::IconButton::new(&icons::PLUS)
+        .variant(rune_kit::IconButtonVariant::Ghost)
+        .label("New tab")
+        .shortcut("⌘T")
+        .on_press(|s: &mut App| {
+            if s.new_menu {
+                s.new_menu = false;
+            } else {
+                s.open_new_menu();
+            }
+        })
+        .build(k)
+        .key("new-tab");
+    let mut m = rune_kit::Menu::new("new-tab-menu")
+        .trigger(plus)
+        .open(s.new_menu)
+        .min_width(240.0)
+        .on_close(|s: &mut App| s.new_menu = false)
+        .item(rune_kit::MenuItem::new("Open file…").icon(&icons::OPEN_FILE).shortcut("⌘O").on_select_tx(|s: &mut App, tx: &mut Tx| {
+            s.new_menu = false;
+            pick_files(tx, false);
+        }))
+        .item(rune_kit::MenuItem::new("Open folder…").icon(&icons::FOLDER).description("Every file in it, as a table").on_select_tx(|s: &mut App, tx: &mut Tx| {
+            s.new_menu = false;
+            pick_folder(tx);
+        }))
+        .item(rune_kit::MenuItem::new("New compare").icon(&icons::COMPARE).description("Then add or drop files into it").on_select(|s: &mut App| {
+            s.new_menu = false;
+            s.new_compare();
+        }))
+        .item(rune_kit::MenuItem::new("Shared pages").icon(&icons::SHARE).description("Every page you've shared; take them down").on_select(|s: &mut App| {
+            s.new_menu = false;
+            s.open_shared();
+        }));
+    if !s.menu_runs.is_empty() {
+        m = m.separator().group_label("Runs");
+        for r in &s.menu_runs {
+            let run = r.clone();
+            m = m.item(rune_kit::MenuItem::new(r.clone()).icon(&icons::TABLE).on_select(move |s: &mut App| {
+                s.new_menu = false;
+                s.open(TabKind::Run, Vec::new(), Some(run.clone()), false, true, Some(run.clone()), None);
+            }));
+        }
+    }
+    m.build(k, layer)
+}
+
+/// Asks for a file. `add` puts it beside what's open (a compare); otherwise it opens in a tab.
+pub fn pick_files(tx: &mut Tx, add: bool) {
+    let mut exts: Vec<&str> = crate::item::AUDIO_EXT.to_vec();
+    exts.extend_from_slice(crate::item::VIDEO_EXT);
+    let opts = rune::FileDialogOptions { title: if add { "Add a file to compare".into() } else { "Open a file".into() }, ..Default::default() }.filter("Audio and video", &exts);
+    tx.open_file(opts, move |s: &mut App, r, _tx: &mut Tx| match r {
+        Ok(Some(p)) if add => s.add_members(vec![p.display().to_string()]),
+        Ok(Some(p)) => s.open_files(vec![p]),
+        Ok(None) => {}
+        Err(e) => s.toast = Some((format!("Couldn't open the file dialog: {e:?}"), true)),
+    });
+}
+
+pub fn pick_folder(tx: &mut Tx) {
+    tx.open_folder(rune::FileDialogOptions { title: "Open a folder of audio".into(), ..Default::default() }, |s: &mut App, r, _tx: &mut Tx| {
+        if let Ok(Some(p)) = r {
+            s.open_folder(p);
+        }
+    });
+}
+
+/// A dashed target for dropped files, with the same choices as the "+" menu.
+pub fn drop_zone(msg: &str, _k: &Kit) -> El {
+    col()
+        .key("drop-zone")
+        .w_full()
+        .grow(1.0)
+        .min_h(160.0)
+        .center()
+        .gap(14.0)
+        .radius(8.0)
+        .border(1.0, px::GRILLE)
+        .fill(px::SCREEN)
+        .transition(rune::Transition::opacity())
+        .child(rune::icon(&icons::DROP, 24.0).color(px::FAINT))
+        .child(text(msg.to_uppercase()).font(px::pixel(16.0)).color(px::LED))
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    px::key("OPEN FILE…", true).key("dz-file").on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare))),
+                )
+                .child(px::key("OPEN FOLDER…", false).key("dz-folder").on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx))),
+        )
+}
+
+fn empty(s: &App, _k: &Kit) -> El {
+    // adeck's mark: a lowercase "a" on a dot-matrix screen.
+    const MARK: [&str; 8] = ["........", "..####..", "......#.", "..#####.", ".#....#.", ".#....#.", "..#####.", "........"];
+    let mut mark = rune::col().key("mark").gap(4.0).px(14.0).py(14.0).radius(10.0).fill(px::SCREEN).border(1.0, px::LINE);
+    for line in MARK {
+        let mut r = row().gap(4.0);
+        for ch in line.chars() {
+            r = r.child(rune::el().size(10.0, 10.0).radius(5.0).fill(if ch == '#' { px::LED } else { px::GRILLE }));
+        }
+        mark = mark.child(r);
+    }
+    let hint = |keys: &str, what: &str| row().gap(8.0).center_y().child(px::key(keys, false)).child(px::label(what));
+    let mcp = format!("claude mcp add --transport http adeck http://127.0.0.1:{}/mcp", s.cfg.port);
+    col()
+        .key("empty")
+        .w_full()
+        .grow(1.0)
+        .center()
+        .gap(20.0)
+        .child(mark)
+        .child(text("DROP AUDIO HERE").font(px::pixel(28.0)).color(px::LED))
+        .child(text("Or ask your agent to open files, a compare or a run.").font(rune::TextStyle::new(13.0, 400.0)).color(px::SILK))
+        .child(
+            row()
+                .gap(8.0)
+                .child(px::key("OPEN FILE…", true).key("empty-file").on_press_tx(|_s: &mut App, tx: &mut Tx| pick_files(tx, false)))
+                .child(px::key("OPEN FOLDER…", false).key("empty-folder").on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)))
+                .child(px::key("NEW COMPARE", false).key("empty-compare").on_press(|s: &mut App| s.new_compare())),
+        )
+        .child(row().gap(20.0).pt(8.0).child(hint("⌘O", "Open")).child(hint("⌘K", "Commands")).child(hint("?", "Keys")))
+        .child(text(mcp).font(rune::TextStyle::new(11.0, 400.0).mono()).color(px::OFF).selectable(true).pt(8.0))
 }
 
 pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    // Space plays and pauses unless a text field has it. Fields take it before this runs.
     let plain = !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl;
-    if ev.key == rune::Key::Text(" ".into()) && plain {
-        if s.player.track.is_some() {
-            s.toggle_deck(tx);
+    if ev.is_command('k') || (ev.is_command('p') && ev.mods.shift) {
+        if s.palette.is_some() {
+            s.palette = None;
         } else {
-            s.play_focused(None, tx);
+            palette::open(s);
         }
         return true;
     }
-    // On the deck: ← and → step a beat, with ⇧ a bar; - and = zoom the waveform.
-    if s.player.track.is_some() && !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl {
-        let bar = if ev.mods.shift { 4 } else { 1 };
-        match &ev.key {
-            rune::Key::Left => {
-                s.nudge_beats(-bar);
+    // ⌘F: the page's search field, or the command palette on a page without one.
+    if ev.is_command('f') && !ev.mods.shift {
+        s.keys_help = false;
+        if s.palette.is_none() && !focus_search(s) {
+            palette::open(s);
+        }
+        return true;
+    }
+    if s.palette.is_some() {
+        return false;
+    }
+    if s.keys_help {
+        if ev.key == rune::Key::Escape || ev.key == rune::Key::Text("?".into()) {
+            s.keys_help = false;
+        }
+        return true;
+    }
+    if !ev.mods.cmd && !ev.mods.ctrl && ev.key == rune::Key::Text("?".into()) {
+        keys::toggle(s);
+        return true;
+    }
+    if ev.is_command('t') {
+        s.open_new_menu();
+        return true;
+    }
+    if ev.is_command('e') && ev.mods.shift {
+        if let Err(e) = s.share() {
+            s.toast = Some((e, true));
+        }
+        return true;
+    }
+    if ev.is_command('s') && ev.mods.shift {
+        s.screenshot();
+        return true;
+    }
+    if ev.is_command('o') {
+        pick_files(tx, false);
+        return true;
+    }
+    if ev.is_command('w') {
+        if let Some(a) = s.active {
+            s.close(a);
+        }
+        return true;
+    }
+    let Some(kind) = s.current().map(|t| t.spec.kind) else { return false };
+    if plain && ev.key == rune::Key::Text("/".into()) && focus_search(s) {
+        return true;
+    }
+    if plain && ev.key == rune::Key::Text("\\".into()) {
+        s.toggle_pane();
+        return true;
+    }
+    // The pane: ⌘1 to ⌘5 open a section, ⌘[ and ⌘] dock it left or right.
+    if let rune::Key::Command(c) = ev.key
+        && !ev.mods.shift
+    {
+        match c {
+            '1'..='5' if s.pane_section(c as usize - '1' as usize) => return true,
+            '[' => {
+                s.set_pane(crate::ui::px::Dock::Left);
                 return true;
             }
-            rune::Key::Right => {
-                s.nudge_beats(bar);
-                return true;
-            }
-            rune::Key::Text(t) if t == "-" => {
-                s.zoom(1);
-                return true;
-            }
-            rune::Key::Text(t) if t == "=" || t == "+" => {
-                s.zoom(-1);
+            ']' => {
+                s.set_pane(crate::ui::px::Dock::Right);
                 return true;
             }
             _ => {}
         }
     }
-    // 1 to 8 are the hot cue pads, as on a player.
-    if let rune::Key::Text(t) = &ev.key
-        && plain
-        && let Some(d @ '1'..='8') = t.chars().next().filter(|_| t.len() == 1)
-        && s.player.track.is_some()
-    {
-        s.hot_cue(d as u8 - b'1', tx);
+    if matches!(kind, TabKind::Run | TabKind::Diff | TabKind::Shared) {
+        return false;
+    }
+    if kind == TabKind::Board && s.current().and_then(|t| t.board()).is_some_and(crate::board::Board::is_pads) && !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl {
+        match &ev.key {
+            rune::Key::Text(ch) if ch == " " => {
+                s.pad_replay();
+                return true;
+            }
+            rune::Key::Text(ch) if ch.chars().count() == 1 && pads::on_key(s, ch.chars().next().unwrap_or(' ')) => return true,
+            _ => {}
+        }
+    }
+    if kind == TabKind::Board && board_key(s, ev) {
         return true;
     }
-    // Delete takes the selected songs out of the playlist on screen, or, in the collection,
-    // asks before removing them from the library.
-    if matches!(ev.key, rune::Key::Backspace | rune::Key::Delete) && !ev.mods.alt && !ev.mods.ctrl && s.renaming.is_none() {
-        let ids = s.selected_ids();
-        if !ids.is_empty() {
-            match s.browse {
-                Browse::Playlist(_) if !ev.mods.cmd => s.remove_from_playlist(),
-                Browse::Playlist(_) | Browse::Collection => s.confirm = Some(crate::edits::Confirm::RemoveTracks(ids)),
+    let Some(t) = s.current() else { return false };
+    if ev.key == rune::Key::Text(" ".into()) && plain {
+        s.toggle_play();
+        return true;
+    }
+    if !plain {
+        return false;
+    }
+    let step = if ev.mods.shift { 5.0 } else { 1.0 };
+    match &ev.key {
+        rune::Key::Left => {
+            let at = s.mixer.secs() - step;
+            s.seek_secs(at);
+            return true;
+        }
+        rune::Key::Right => {
+            let at = s.mixer.secs() + step;
+            s.seek_secs(at);
+            return true;
+        }
+        rune::Key::Escape => {
+            s.clear_loop();
+            return true;
+        }
+        rune::Key::Text(ch) if matches!(ch.as_str(), "=" | "+" | "-" | "f" | "n" | "s" | "[" | "]" | "l") => {
+            match ch.as_str() {
+                "l" => s.toggle_loop(),
+                "=" | "+" => s.zoom(0.5),
+                "-" => s.zoom(2.0),
+                "f" => s.zoom_fit(),
+                "n" => s.show_note(),
+                "s" => s.send_to_agent(None, tx),
+                "[" => s.pan(-0.5),
+                _ => s.pan(0.5),
             }
             return true;
         }
-    }
-    if shell::is_sidebar_toggle(ev) {
-        s.sidebar.toggle();
-        return true;
-    }
-    if ev.is_command('i') && ev.mods.alt {
-        s.inspector.toggle();
-        return true;
+        rune::Key::Enter if kind == TabKind::Compare => {
+            s.pick();
+            return true;
+        }
+        rune::Key::Text(ch) if kind == TabKind::Compare && (ch == "b" || ch == "m") => {
+            if ch == "b" {
+                s.toggle_blind();
+            } else {
+                s.toggle_loudness_match();
+            }
+            return true;
+        }
+        rune::Key::Text(ch) if ch.len() == 1 => {
+            let d = ch.chars().next().unwrap_or(' ');
+            match (kind, d) {
+                (TabKind::Single, '0'..='3') => {
+                    s.score(i64::from(d as u8 - b'0'));
+                    return true;
+                }
+                (TabKind::Compare | TabKind::Render, '1'..='9') => {
+                    let pos = (d as u8 - b'1') as usize;
+                    let shown = t.shown();
+                    if let Some(&member) = shown.get(pos) {
+                        s.set_active_member(member);
+                    }
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        _ => {}
     }
     false
+}
+
+/// A board's keys: ↑/↓ group, ←/→ member (⇧ seeks), 1-9 member, R replay, L loop, Z zoom,
+/// K keep, D drop, B blind, M match, Enter pick.
+fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
+    if ev.mods.cmd || ev.mods.alt || ev.mods.ctrl {
+        return false;
+    }
+    match &ev.key {
+        rune::Key::Up => s.board_step_group(-1),
+        rune::Key::Down => s.board_step_group(1),
+        rune::Key::Left | rune::Key::Right if ev.mods.shift => {
+            let by = if ev.key == rune::Key::Left { -5.0 } else { 5.0 };
+            let at = s.mixer.secs() + by;
+            s.seek_secs(at);
+        }
+        rune::Key::Left => s.board_step_member(-1),
+        rune::Key::Right => s.board_step_member(1),
+        rune::Key::Enter => s.board_pick(),
+        rune::Key::Escape => {
+            if s.current().is_some_and(|t| t.loop_secs.is_some() || t.selection.is_some()) {
+                s.clear_loop();
+            } else {
+                s.toggle_pane();
+            }
+        }
+        rune::Key::Text(ch) if ch.chars().count() == 1 => {
+            let d = ch.chars().next().unwrap_or(' ').to_ascii_lowercase();
+            match d {
+                '1'..='9' => {
+                    let pos = (d as u8 - b'1') as usize;
+                    let Some(t) = s.current() else { return false };
+                    let Some(g) = t.focused() else { return false };
+                    let Some(&m) = t.group_order(g).get(pos) else { return true };
+                    let key = g.key.clone();
+                    s.board_play(&key, m);
+                }
+                'r' => s.board_replay(),
+                'l' => s.toggle_loop(),
+                'z' => s.toggle_zoom(),
+                'k' => s.decide_active("keep"),
+                'd' => s.decide_active("drop"),
+                'b' => s.toggle_blind(),
+                'm' => s.toggle_loudness_match(),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
 }
