@@ -1,4 +1,4 @@
-//! Long-running work: analysis, USB export, iCloud downloads.
+//! Long-running work: downloads from S3, earshot runs.
 //!
 //! Every job gets its own id, its own cancel token and its own row in the status bar. A stop
 //! button is built from the job it sits next to and captures only that job's id, so it can
@@ -10,7 +10,7 @@
 //!
 //! Every job keeps a log: when it started, each step it took, every problem with the file and
 //! the system error behind it, when stop was pressed and how it ended. The Activity panel shows
-//! it, and each line also goes to `~/Library/Logs/Sleeve/activity.log`.
+//! it, and each line also goes to `~/Library/Logs/adeck/activity.log`.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -36,27 +36,18 @@ impl JobId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobKind {
-    Analysis,
-    Export,
-    Download,
-    /// A small change to the library, such as a hot cue.
-    Edit,
-    /// Songs dropped in from Finder, going into the library.
-    Import,
-    /// A USB stick being ejected.
-    Eject,
+    /// An S3 item coming down.
+    Fetch,
+    /// earshot working on a file.
+    Earshot,
 }
 
 impl JobKind {
     /// The verb a stop button's tooltip uses: "Stop analysis".
     pub fn noun(self) -> &'static str {
         match self {
-            JobKind::Analysis => "analysis",
-            JobKind::Export => "export",
-            JobKind::Download => "download",
-            JobKind::Edit => "change",
-            JobKind::Import => "import",
-            JobKind::Eject => "eject",
+            JobKind::Fetch => "download",
+            JobKind::Earshot => "earshot",
         }
     }
 }
@@ -136,7 +127,7 @@ impl LogFile {
 
 /// Where the log file lives on this Mac.
 pub fn log_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Logs/Sleeve/activity.log"))
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Logs/adeck/activity.log"))
 }
 
 /// Writes log lines for one job from any thread. Cheap to clone, so analysis can hand one to
@@ -197,7 +188,7 @@ pub enum Phase {
 pub struct Job {
     pub id: JobId,
     pub kind: JobKind,
-    /// What the job is doing, in a few words: "Exporting to KINGSTON".
+    /// What the job is doing, in a few words: "Downloading take-3".
     pub title: String,
     /// The item in hand: a track's title, a file name.
     pub detail: String,
@@ -554,8 +545,8 @@ mod tests {
             }
             Outcome::Stopped("stopped".into())
         };
-        let export = jobs.spawn(JobKind::Export, "Exporting", spin);
-        let analysis = jobs.spawn(JobKind::Analysis, "Analysing", spin);
+        let export = jobs.spawn(JobKind::Fetch, "Exporting", spin);
+        let analysis = jobs.spawn(JobKind::Earshot, "Analysing", spin);
 
         jobs.cancel(analysis);
         wait(&mut jobs, |j| !j.get(analysis).unwrap().is_active());
@@ -570,7 +561,7 @@ mod tests {
     #[test]
     fn a_panicking_job_fails_instead_of_crashing() {
         let mut jobs = Jobs::default();
-        let id = jobs.spawn(JobKind::Export, "Exporting", |_| panic!("boom"));
+        let id = jobs.spawn(JobKind::Fetch, "Exporting", |_| panic!("boom"));
         wait(&mut jobs, |j| !j.get(id).unwrap().is_active());
         assert!(matches!(jobs.get(id).unwrap().phase, Phase::Done { outcome: Outcome::Failed(_), .. }));
     }
@@ -578,9 +569,9 @@ mod tests {
     #[test]
     fn finished_jobs_stay_until_you_clear_them() {
         let mut jobs = Jobs::default();
-        let ok = jobs.spawn(JobKind::Analysis, "a", |_| Outcome::Completed("done".into()));
-        let bad = jobs.spawn(JobKind::Export, "b", |_| Outcome::Failed("no".into()));
-        let running = jobs.spawn(JobKind::Download, "c", |rep| {
+        let ok = jobs.spawn(JobKind::Earshot, "a", |_| Outcome::Completed("done".into()));
+        let bad = jobs.spawn(JobKind::Fetch, "b", |_| Outcome::Failed("no".into()));
+        let running = jobs.spawn(JobKind::Fetch, "c", |rep| {
             while !rep.is_cancelled() {
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -601,7 +592,7 @@ mod tests {
     #[test]
     fn a_job_logs_its_start_its_work_its_stop_and_its_end() {
         let mut jobs = Jobs::default();
-        let id = jobs.spawn(JobKind::Analysis, "Analysing 2 tracks", |rep| {
+        let id = jobs.spawn(JobKind::Earshot, "Analysing 2 tracks", |rep| {
             rep.info("one");
             rep.log().clone().warn("two, from a worker");
             while !rep.is_cancelled() {
@@ -623,7 +614,7 @@ mod tests {
     #[test]
     fn a_panic_lands_in_the_log() {
         let mut jobs = Jobs::default();
-        let id = jobs.spawn(JobKind::Export, "Exporting", |_| panic!("disk on fire"));
+        let id = jobs.spawn(JobKind::Fetch, "Exporting", |_| panic!("disk on fire"));
         wait(&mut jobs, |j| !j.get(id).unwrap().is_active());
         assert!(jobs.get(id).unwrap().log.iter().any(|l| l.level == Level::Error && l.text.contains("disk on fire")));
     }

@@ -11,7 +11,8 @@ use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Spinner};
 use crate::app::App;
 use crate::jobs::{Job, Level, Outcome, Phase};
 use crate::ui::icons;
-use crate::ui::tracks::INSET;
+/// The footer's side padding.
+pub const INSET: f32 = 16.0;
 
 pub const HEIGHT: f32 = 32.0;
 /// A compact chip's width, so the footer knows how many fit.
@@ -227,7 +228,7 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
 /// How long a running job has been going: "0:42".
 fn elapsed(job: &Job) -> String {
     let secs = job.started.elapsed().as_secs() as u32;
-    format!("running {}", crate::library::duration(secs))
+    format!("running {}", { let s = secs; format!("{}:{:02}", s / 60, s % 60) })
 }
 
 /// One job's log: every line with its time and level, newest at the bottom, and a copy button.
@@ -319,10 +320,9 @@ mod tests {
     }
 
     fn rt_with_two_jobs() -> (Runtime<App>, crate::jobs::JobId, crate::jobs::JobId) {
-        let mut app = App::new();
-        // The export first, as in the bug report, then the analysis.
-        let export = app.jobs.stage(JobKind::Export, "Exporting to KINGSTON", "Halcyon Drift", 10, Some(100), Phase::Running);
-        let analysis = app.jobs.stage(JobKind::Analysis, "Analysing 48 tracks", "Paper Orbit", 3, Some(48), Phase::Running);
+        let mut app = crate::scenes::test_app();
+        let export = app.jobs.stage(JobKind::Fetch, "Downloading take-1", "take-1.mp3", 10, Some(100), Phase::Running);
+        let analysis = app.jobs.stage(JobKind::Earshot, "earshot describe · take-2", "take-2.wav", 3, Some(48), Phase::Running);
         let env = Env { system_dark: true, scale: 2.0 };
         let mut rt = Runtime::new(app, crate::ui::view, (1280.0, 800.0), env);
         rt.frame(0.0);
@@ -364,8 +364,8 @@ mod tests {
     /// every job its own stop button there too.
     #[test]
     fn folded_jobs_stop_one_at_a_time_from_activity() {
-        let mut app = App::new();
-        let ids: Vec<_> = (0..4).map(|i| app.jobs.stage(JobKind::Analysis, &format!("Analysing batch {i}"), "", 1, Some(10), Phase::Running)).collect();
+        let mut app = crate::scenes::test_app();
+        let ids: Vec<_> = (0..6).map(|i| app.jobs.stage(JobKind::Earshot, &format!("earshot batch {i}"), "", 1, Some(10), Phase::Running)).collect();
         let env = Env { system_dark: true, scale: 2.0 };
         let mut rt = Runtime::new(app, crate::ui::view, (1280.0, 800.0), env);
         rt.frame(0.0);

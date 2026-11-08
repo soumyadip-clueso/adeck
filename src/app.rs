@@ -1,630 +1,1204 @@
-//! The app's state, and the changes handlers make to it.
+//! The app's state: tabs, the items they show, what's been worked out about each, playback,
+//! verdicts, and the requests the MCP server hands in.
+//!
+//! Everything slow (resolving an S3 item, decoding and analysing, earshot) runs on a worker and
+//! comes back through `events`, drained in `poll`. MCP tool calls arrive on their own channel
+//! and are answered from `poll` too, so a tool sees exactly what the window shows.
 
-use std::collections::HashSet;
-use std::sync::mpsc::{Receiver, channel};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
-use rbl_index::Row;
-use rune::{ImageCache, TextEdit, Tx, Waker};
-use rune_kit::shell::PaneState;
-use rune_kit::{SortDir, TableState};
+use rune::{Pixels, TextEdit, Tx, Waker};
+use rune_kit::TableState;
+use rune_kit::shell::TabDragState;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
-use crate::jobs::{JobKind, Jobs};
-use crate::library::{self, Browse, Loaded, PlaylistNode, Source};
+use crate::config::Config;
+use crate::derive::{self, Analysis, Earshot};
+use crate::feedback::{self, Row};
+use crate::item::{Item, Media};
+use crate::jobs::{JobKind, Jobs, Outcome};
+use crate::mcp;
+use crate::mixer::{self, Mixer};
+use crate::source;
 
-pub enum LibState {
-    Loading,
-    Ready(Loaded),
-    Failed(String),
+/// The loudness every member is brought to when the match is on.
+pub const MATCH_LUFS: f64 = -16.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabKind {
+    Single,
+    Compare,
+    Render,
+    Run,
 }
 
-/// Where a file drag from Finder would land.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DropTarget {
-    /// The window: into the library, and the playlist on screen if there is one.
-    Library,
-    /// The Collection row in the sidebar: into the library only.
-    Collection,
-    /// A playlist in the sidebar.
-    Playlist(u64),
+/// What a tab is, as the session file and the tools see it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TabSpec {
+    pub id: u64,
+    pub kind: TabKind,
+    #[serde(default)]
+    pub items: Vec<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub blind: bool,
+    #[serde(default = "yes")]
+    pub loudness_match: bool,
+    /// The LLM's note pinned in the tab: what to listen for.
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub run: Option<String>,
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// A blind tab's shuffle: shown position → member index.
+    #[serde(default)]
+    pub order: Vec<usize>,
+    #[serde(default)]
+    pub revealed: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+pub struct Tab {
+    pub spec: TabSpec,
+    /// The member you hear, by member index.
+    pub active: usize,
+    pub loop_secs: Option<(f64, f64)>,
+    /// Run tabs: the rows, as item ids in table order.
+    pub rows: Vec<String>,
+    pub table: TableState,
+    pub filter: TextEdit,
+    pub unscored_only: bool,
+    /// The feedback note being typed.
+    pub note: TextEdit,
+    pub error: Option<String>,
+    pub loading: bool,
+    /// Render tabs: one muted video per member, following the mixer's clock.
+    pub videos: Vec<rune::Player>,
+    /// The member a blind pick chose, by member index, once picked.
+    pub picked: Option<usize>,
+    /// The spectrogram or metadata panel's view.
+    pub show_sheet: bool,
+}
+
+impl Tab {
+    pub fn new(spec: TabSpec) -> Tab {
+        let filter = TextEdit::new(spec.filter.clone().unwrap_or_default());
+        Tab {
+            spec,
+            active: 0,
+            loop_secs: None,
+            rows: Vec::new(),
+            table: TableState::new().multi_select(true),
+            filter,
+            unscored_only: false,
+            note: TextEdit::new(""),
+            error: None,
+            loading: false,
+            videos: Vec::new(),
+            picked: None,
+            show_sheet: false,
+        }
+    }
+    pub fn id(&self) -> u64 {
+        self.spec.id
+    }
+    pub fn is_blind_hidden(&self) -> bool {
+        self.spec.blind && !self.spec.revealed
+    }
+    /// Members in the order they're shown.
+    pub fn shown(&self) -> Vec<usize> {
+        if self.spec.blind && self.spec.order.len() == self.spec.items.len() { self.spec.order.clone() } else { (0..self.spec.items.len()).collect() }
+    }
+    /// A member's label: A, B, C… or X, Y, Z… while blind.
+    pub fn member_label(&self, member: usize) -> String {
+        let pos = self.shown().iter().position(|&m| m == member).unwrap_or(member);
+        let base = if self.is_blind_hidden() { b'X' } else { b'A' };
+        let letter = if pos < 3 || !self.is_blind_hidden() { (base + pos as u8) as char } else { (b'P' + (pos as u8 - 3)) as char };
+        letter.to_string()
+    }
+}
+
+/// An item and what's known about it so far.
+pub struct Entry {
+    pub item: Item,
+    pub analysis: Option<Analysis>,
+    pub analysing: bool,
+    pub failed: Option<String>,
+    pub wave: Pixels,
+    pub spec: Pixels,
+    pub earshot: HashMap<&'static str, Value>,
+    pub earshot_busy: HashSet<&'static str>,
+    pub sheet: Option<Pixels>,
+}
+
+impl Entry {
+    fn new(item: Item) -> Entry {
+        let mut e = Entry { item, analysis: None, analysing: false, failed: None, wave: Pixels::new(), spec: Pixels::new(), earshot: HashMap::new(), earshot_busy: HashSet::new(), sheet: None };
+        for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
+            if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {
+                e.earshot.insert(cmd.name(), v);
+            }
+        }
+        e
+    }
+}
+
+/// What workers send back.
+pub enum Event {
+    Resolved { tab: u64, id: String, result: Result<Item, String> },
+    Analysed { id: String, result: Result<(Analysis, Vec<u8>), String> },
+    Listed { tab: u64, result: Result<Vec<Item>, String> },
+    Earshot { id: String, cmd: Earshot, result: Result<Value, String> },
+    Sheet { id: String, result: Result<PathBuf, String> },
 }
 
 pub struct App {
-    pub source: Source,
-    pub lib: LibState,
-    load_rx: Option<Receiver<Result<Loaded, library::LoadError>>>,
-    /// A job changed the library while a reload was already running: read it once more after.
-    reload_again: bool,
-    pub waker: Option<Waker>,
-
-    pub browse: Browse,
-    /// The rows in view, in order. Rebuilt whenever the source, sort or search changes.
-    pub rows: Vec<Row>,
-    pub table: TableState,
-    pub search: TextEdit,
-    pub sort: (String, bool),
-
-    pub tree: Vec<PlaylistNode>,
-    pub collapsed: HashSet<u64>,
-    pub playlists_closed: bool,
-
-    pub sidebar: PaneState,
-    pub inspector: PaneState,
-
+    pub cfg: Config,
+    pub tabs: Vec<Tab>,
+    pub active: Option<u64>,
+    next_tab: u64,
+    pub items: HashMap<String, Entry>,
+    /// Ids being resolved, so two tabs asking for one item resolve it once.
+    resolving: HashSet<String>,
     pub jobs: Jobs,
-    pub player: crate::player::Player,
-    pub deck_wave: Option<crate::deck::DeckWave>,
-    /// The deck track's grid and zoomed waveform, coming from a worker.
-    pub(crate) deck_grid_rx: Option<Receiver<crate::deck::DeckGrid>>,
-    /// The rows whose files are only in iCloud, found by a worker after each load so the list
-    /// never asks the disk while drawing. Empty until the first scan lands.
-    pub evicted: HashSet<Row>,
-    evicted_rx: Option<Receiver<(u64, HashSet<Row>)>>,
-    /// Quantise: new hot cues and clicks on the deck waveform snap to the nearest beat.
-    pub quantize: bool,
-    /// Seconds of track the zoomed waveform shows across its width.
-    pub zoom_secs: f64,
-    /// The deck's glides for the current anchor, made by the view the first time it draws one.
-    pub glides: std::cell::RefCell<Option<crate::ui::deck::Glides>>,
-    /// What the deck's clock and bar counter last showed, so the view rebuilds only when they
-    /// change rather than on every tick.
-    shown: (u32, u32, i32, u16),
-    /// Imports still running, with the tracks each has added so far. They're analysed when
-    /// their import finishes.
-    imports: Vec<(crate::jobs::JobId, crate::import::Added)>,
-    /// Where a file drag from Finder would land right now, for the drop highlight.
-    pub drop_over: Option<DropTarget>,
-    /// The playlist being renamed in the sidebar, and the field holding its new name.
-    pub renaming: Option<u64>,
-    pub rename: TextEdit,
-    /// A question on screen before something is deleted.
-    pub confirm: Option<crate::edits::Confirm>,
-    /// A playlist being made, and the id its job hands back.
-    pub(crate) created: Option<(crate::jobs::JobId, crate::edits::Slot<String>)>,
-    /// A playlist just made, to open and name once the library is read again.
-    pub(crate) rename_next: Option<u64>,
-    /// The iCloud download the deck is waiting on: its job, the track and where to start.
-    pub fetch: Option<(crate::jobs::JobId, String, Option<f64>)>,
+    pub mixer: Mixer,
+    pub feedback: feedback::Store,
+    pub scores: HashMap<String, i64>,
+    waker: Option<Waker>,
+    tx: Sender<Event>,
+    rx: Receiver<Event>,
+    pub calls: Option<Receiver<mcp::Call>>,
+    pub tab_drag: TabDragState,
+    pub activity_open: bool,
     /// The job whose log is open in the Activity panel.
     pub log_open: Option<crate::jobs::JobId>,
-    /// The Activity panel above the footer, listing every job.
-    pub activity_open: bool,
-    /// USB drives plugged in, newest reading.
-    pub sticks: Vec<crate::export::Stick>,
-    sticks_rx: Option<Receiver<Vec<crate::export::Stick>>>,
-    mounts: Option<(rbl_devices::mounts::MountWatcher, Receiver<()>)>,
-    /// Which drive each export job is writing to, so a drive can't be given two at once.
-    pub export_targets: std::collections::HashMap<crate::jobs::JobId, std::path::PathBuf>,
-    pub images: Option<ImageCache>,
-    pub artwork: Option<(Row, rune::Image)>,
-    /// The focused track's waveform, for the library generation it was read from.
-    pub wave: Option<(Row, u64, rune::Pixels)>,
-    pub clock: f64,
-}
-
-pub fn source_from_args() -> Source {
-    let args = rune::extra_args();
-    let forced = std::env::var("SLEEVE_LIBRARY").ok();
-    if forced.as_deref() == Some("installed") {
-        return Source::Installed;
-    }
-    if args.iter().any(|a| a == "demo") || rune::tooling::headless_run().is_some() || forced.as_deref() == Some("demo") {
-        let dir = std::env::temp_dir().join(format!("sleeve-demo-{}", std::process::id()));
-        Source::Fixture(dir)
-    } else {
-        Source::Installed
-    }
+    /// A message along the bottom: (text, is_error).
+    pub toast: Option<(String, bool)>,
+    pub mcp_status: String,
+    dirty: bool,
+    pub headless: bool,
 }
 
 impl App {
     pub fn new() -> App {
-        let mut table = TableState::new().key("tracks").multi_select(true);
-        table.set_sort("title", SortDir::Ascending);
+        let (cfg, cfg_error) = Config::load();
+        let (tx, rx) = channel();
+        let headless = rune::tooling::headless_run().is_some() || std::env::var_os("ADECK_HEADLESS").is_some();
+        let feedback = feedback::Store::new(crate::config::dir().join("feedback.jsonl"));
+        let scores = feedback::latest_scores(&feedback.read_all());
+        let mut jobs = Jobs::default();
+        if let Some(p) = crate::jobs::log_path() {
+            jobs.log_to(&p);
+        }
         let mut app = App {
-            source: source_from_args(),
-            lib: LibState::Loading,
-            load_rx: None,
-            reload_again: false,
+            mcp_status: format!("MCP :{}", cfg.port),
+            cfg,
+            tabs: Vec::new(),
+            active: None,
+            next_tab: 1,
+            items: HashMap::new(),
+            resolving: HashSet::new(),
+            jobs,
+            mixer: Mixer::default(),
+            feedback,
+            scores,
             waker: None,
-            browse: Browse::Collection,
-            rows: Vec::new(),
-            table,
-            search: TextEdit::new(""),
-            sort: ("title".into(), false),
-            tree: Vec::new(),
-            collapsed: HashSet::new(),
-            playlists_closed: false,
-            sidebar: PaneState::new(240.0).range(180.0, 420.0),
-            inspector: PaneState::new(300.0).range(260.0, 440.0),
-            jobs: Jobs::default(),
-            player: Default::default(),
-            deck_wave: None,
-            quantize: true,
-            zoom_secs: 4.0,
-            glides: std::cell::RefCell::new(None),
-            deck_grid_rx: None,
-            evicted: HashSet::new(),
-            evicted_rx: None,
-            imports: Vec::new(),
-            drop_over: None,
-            renaming: None,
-            rename: TextEdit::new(""),
-            confirm: None,
-            created: None,
-            rename_next: None,
-            shown: (0, 0, 0, 0),
-            fetch: None,
-            log_open: None,
+            tx,
+            rx,
+            calls: None,
+            tab_drag: TabDragState::default(),
             activity_open: false,
-            sticks: Vec::new(),
-            sticks_rx: None,
-            mounts: None,
-            export_targets: Default::default(),
-            images: None,
-            artwork: None,
-            wave: None,
-            clock: 0.0,
+            log_open: None,
+            toast: cfg_error.map(|e| (e, true)),
+            dirty: false,
+            headless,
         };
-        // Headless runs (snapshots, scripted tests) load at once so the first frame has data.
-        if rune::tooling::headless_run().is_some() {
-            // Images decode on Rune's worker; headless frames wait for them below.
-            app.images = Some(ImageCache::new(std::sync::Arc::new(|| {})));
-            let loaded = library::load(&app.source);
-            app.land(loaded);
-            app.sticks = crate::export::sticks();
+        app.restore();
+        if headless {
+            app.settle();
         }
         app
     }
 
-    pub fn setup(&mut self, waker: Waker) {
-        self.jobs.set_waker(waker.clone());
-        if rune::tooling::headless_run().is_none()
-            && let Some(path) = crate::jobs::log_path()
-        {
-            self.jobs.log_to(&path);
-        }
-        self.images = Some(ImageCache::new(waker.clone()));
-        self.player.open(Some(waker.clone()));
-        self.waker = Some(waker);
-        if matches!(self.lib, LibState::Loading) {
-            self.start_load();
-        }
-        if rune::tooling::headless_run().is_none() {
-            let (tx, rx) = channel();
-            let w = self.waker.clone();
-            let watcher = rbl_devices::mounts::MountWatcher::start(rbl_devices::mounts::INTERVAL, move || {
-                let _ = tx.send(());
-                if let Some(w) = &w {
-                    w();
+    pub fn setup(&mut self, w: Waker) {
+        self.waker = Some(w.clone());
+        self.jobs.set_waker(w.clone());
+        self.mixer.set_waker(w.clone());
+        if !self.headless {
+            match mcp::serve(self.cfg.clone(), self.feedback.path.clone(), self.feedback.signal.clone(), w) {
+                Ok(rx) => self.calls = Some(rx),
+                Err(e) => {
+                    self.mcp_status = "MCP off".into();
+                    self.toast = Some((format!("The MCP server couldn't start on port {}: {e}", self.cfg.port), true));
                 }
-            });
-            self.mounts = Some((watcher, rx));
-            self.refresh_sticks();
-        }
-    }
-
-    fn start_load(&mut self) {
-        let source = self.source.clone();
-        self.spawn_load(move || library::load(&source));
-    }
-
-    /// Reads the library again after a job changed it. The list keeps its place, sort, search
-    /// and selection; only the values in it change.
-    pub fn start_reload(&mut self) {
-        if self.load_rx.is_some() {
-            self.reload_again = true;
-            return;
-        }
-        let Some(l) = self.loaded() else { return };
-        let (location, generation) = (l.location.clone(), l.generation + 1);
-        self.spawn_load(move || library::reload(location, generation));
-    }
-
-    /// Reads the plugged-in drives again on a worker. Each one is inspected once, not polled.
-    pub fn refresh_sticks(&mut self) {
-        let (tx, rx) = channel();
-        let w = self.waker.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(crate::export::sticks());
-            if let Some(w) = w {
-                w();
             }
-        });
-        self.sticks_rx = Some(rx);
+        }
     }
 
-    pub fn exporting_to(&self, mount: &std::path::Path) -> bool {
-        self.export_targets.iter().any(|(id, m)| m == mount && self.jobs.get(*id).is_some_and(|j| j.is_active()))
+    fn wake(&self) {
+        if let Some(w) = &self.waker {
+            w();
+        }
     }
 
-    /// Exports these playlists to a drive, as a job of its own.
-    pub fn export(&mut self, playlists: Vec<u64>, mount: std::path::PathBuf) {
-        if playlists.is_empty() || self.exporting_to(&mount) {
+    pub fn tab(&self, id: u64) -> Option<&Tab> {
+        self.tabs.iter().find(|t| t.id() == id)
+    }
+    pub fn tab_mut(&mut self, id: u64) -> Option<&mut Tab> {
+        self.tabs.iter_mut().find(|t| t.id() == id)
+    }
+    pub fn current(&self) -> Option<&Tab> {
+        self.active.and_then(|a| self.tab(a))
+    }
+    pub fn current_mut(&mut self) -> Option<&mut Tab> {
+        let a = self.active?;
+        self.tab_mut(a)
+    }
+    pub fn entry(&self, id: &str) -> Option<&Entry> {
+        self.items.get(id)
+    }
+
+    // Opening tabs.
+
+    pub fn open(&mut self, kind: TabKind, items: Vec<String>, label: Option<String>, blind: bool, loudness_match: bool, run: Option<String>, filter: Option<String>) -> u64 {
+        let id = self.next_tab;
+        self.next_tab += 1;
+        let order = if blind { shuffle(items.len(), id) } else { Vec::new() };
+        let spec = TabSpec { id, kind, items, label, blind, loudness_match, note: None, run, filter, order, revealed: false };
+        self.tabs.push(Tab::new(spec));
+        self.load_tab(id);
+        self.focus(id);
+        self.dirty = true;
+        id
+    }
+
+    /// Starts resolving and analysing everything a tab shows.
+    fn load_tab(&mut self, id: u64) {
+        let Some(t) = self.tab(id) else { return };
+        let (kind, items, run) = (t.spec.kind, t.spec.items.clone(), t.spec.run.clone());
+        if kind == TabKind::Run {
+            if let Some(run) = run {
+                if let Some(t) = self.tab_mut(id) {
+                    t.loading = true;
+                }
+                let cfg = self.cfg.clone();
+                let tx = self.tx.clone();
+                let waker = self.waker.clone();
+                let work = move || {
+                    let result = source::list_items(&cfg, &run);
+                    let _ = tx.send(Event::Listed { tab: id, result });
+                    if let Some(w) = waker {
+                        w();
+                    }
+                };
+                if self.headless { work() } else { std::thread::spawn(work); }
+            }
             return;
         }
-        let Some(l) = self.loaded() else { return };
-        let (store, index) = (l.store.clone(), l.index.clone());
-        let name = self.sticks.iter().find(|s| s.mount == mount).map_or_else(|| mount.display().to_string(), |s| s.name.clone());
-        let target = mount.clone();
-        let id = self.jobs.spawn(JobKind::Export, format!("Exporting to {name}"), move |rep| crate::export::run(&store, index, playlists, target, rep));
-        self.export_targets.insert(id, mount);
+        for item in items {
+            self.ensure(id, &item);
+        }
     }
 
-    fn spawn_load(&mut self, work: impl FnOnce() -> Result<Loaded, library::LoadError> + Send + 'static) {
-        let (tx, rx) = channel();
+    /// Resolves an item if it's new and analyses it if it hasn't been.
+    fn ensure(&mut self, tab: u64, id: &str) {
+        if let Some(e) = self.items.get(id) {
+            if e.analysis.is_none() && !e.analysing && e.failed.is_none() {
+                self.analyse(id);
+            }
+            return;
+        }
+        if !self.resolving.insert(id.to_owned()) {
+            return;
+        }
+        let cfg = self.cfg.clone();
+        let tx = self.tx.clone();
         let waker = self.waker.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(work());
+        let item_id = id.to_owned();
+        let slow = id.starts_with("s3://") || id.starts_with("run:s3:");
+        let work = move || {
+            let result = source::resolve(&cfg, &item_id);
+            let _ = tx.send(Event::Resolved { tab, id: item_id, result });
             if let Some(w) = waker {
                 w();
             }
-        });
-        self.load_rx = Some(rx);
+        };
+        if self.headless {
+            work();
+        } else if slow {
+            let label = id.rsplit('/').next().unwrap_or(id).to_owned();
+            self.jobs.spawn(JobKind::Fetch, format!("Downloading {label}"), move |_| {
+                work();
+                Outcome::Completed("Downloaded".into())
+            });
+        } else {
+            std::thread::spawn(work);
+        }
     }
 
-    pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
-        self.clock = clock;
-        let mut changed = false;
-        if let Some(rx) = &self.load_rx
-            && let Ok(result) = rx.try_recv()
-        {
-            self.load_rx = None;
-            match (result, &self.lib) {
-                // A reload that fails keeps the library on screen; the next one may work.
-                (Err(_), LibState::Ready(_)) => {}
-                (result, _) => self.land(result),
+    fn analyse(&mut self, id: &str) {
+        let Some(e) = self.items.get_mut(id) else { return };
+        e.analysing = true;
+        let path = e.item.path.clone();
+        let tx = self.tx.clone();
+        let waker = self.waker.clone();
+        let item_id = id.to_owned();
+        let work = move || {
+            let result = derive::analyse(&path);
+            let _ = tx.send(Event::Analysed { id: item_id, result });
+            if let Some(w) = waker {
+                w();
             }
-            if std::mem::take(&mut self.reload_again) {
-                self.start_reload();
+        };
+        if self.headless {
+            work();
+        } else {
+            std::thread::spawn(work);
+        }
+    }
+
+    /// Runs earshot on an item in the background; the tab shows it when it lands.
+    pub fn run_earshot(&mut self, id: &str, cmd: Earshot) {
+        let Some(e) = self.items.get_mut(id) else { return };
+        if e.earshot.contains_key(cmd.name()) || !e.earshot_busy.insert(cmd.name()) {
+            return;
+        }
+        let path = e.item.path.clone();
+        let bin = self.cfg.earshot.clone();
+        let tx = self.tx.clone();
+        let item_id = id.to_owned();
+        let title = format!("earshot {} · {}", cmd.name(), e.item.name);
+        self.jobs.spawn(JobKind::Earshot, title, move |_| {
+            let result = derive::earshot(&bin, &path, cmd);
+            let outcome = match &result {
+                Ok(_) => Outcome::Completed(format!("earshot {} done", cmd.name())),
+                Err(e) => Outcome::Failed(e.clone()),
+            };
+            let _ = tx.send(Event::Earshot { id: item_id, cmd, result });
+            outcome
+        });
+    }
+
+    pub fn run_sheet(&mut self, id: &str) {
+        let Some(e) = self.items.get_mut(id) else { return };
+        if e.sheet.is_some() || !e.earshot_busy.insert("sheet") {
+            return;
+        }
+        let path = e.item.path.clone();
+        let bin = self.cfg.earshot.clone();
+        let tx = self.tx.clone();
+        let item_id = id.to_owned();
+        let work = move || {
+            let result = derive::sheet(&bin, &path);
+            let _ = tx.send(Event::Sheet { id: item_id, result });
+        };
+        if self.headless {
+            work();
+        } else {
+            let title = format!("earshot sheet · {}", e.item.name);
+            self.jobs.spawn(JobKind::Earshot, title, move |_| {
+                work();
+                Outcome::Completed("Sheet drawn".into())
+            });
+        }
+    }
+
+    pub fn focus(&mut self, id: u64) {
+        if self.tab(id).is_none() {
+            return;
+        }
+        if self.active != Some(id) {
+            self.mixer.pause();
+        }
+        self.active = Some(id);
+        self.dirty = true;
+        self.sync_mixer();
+    }
+
+    /// Moves a tab to `to` in the strip.
+    pub fn reorder(&mut self, id: &str, to: usize) {
+        let Ok(id) = id.parse::<u64>() else { return };
+        let Some(from) = self.tabs.iter().position(|t| t.id() == id) else { return };
+        let t = self.tabs.remove(from);
+        self.tabs.insert(to.min(self.tabs.len()), t);
+        self.dirty = true;
+    }
+
+    /// Opens the Activity panel on one job's log.
+    pub fn open_job(&mut self, id: crate::jobs::JobId) {
+        self.activity_open = true;
+        self.log_open = Some(id);
+    }
+
+    pub fn close(&mut self, id: u64) {
+        let Some(i) = self.tabs.iter().position(|t| t.id() == id) else { return };
+        self.tabs.remove(i);
+        if self.mixer.owner() == Some(id) {
+            self.mixer.unload();
+        }
+        if self.active == Some(id) {
+            self.active = self.tabs.get(i.min(self.tabs.len().saturating_sub(1))).map(Tab::id);
+            self.sync_mixer();
+        }
+        self.dirty = true;
+    }
+
+    /// Puts the active tab's members on the mixer once they're all resolved.
+    pub fn sync_mixer(&mut self) {
+        let Some(t) = self.current() else { return };
+        if t.spec.kind == TabKind::Run || self.headless {
+            return;
+        }
+        let tab = t.id();
+        let ids = t.spec.items.clone();
+        let (active, loop_secs) = (t.active, t.loop_secs);
+        let paths: Option<Vec<(String, PathBuf)>> = ids.iter().map(|i| self.items.get(i).map(|e| (i.clone(), e.item.path.clone()))).collect();
+        let Some(paths) = paths else { return };
+        if paths.is_empty() {
+            return;
+        }
+        self.mixer.load(tab, paths);
+        self.mixer.set_active(active);
+        self.mixer.set_loop_secs(loop_secs);
+        self.apply_trims();
+    }
+
+    /// The loudness match's trims for the active tab (or unity when it's off).
+    pub fn apply_trims(&mut self) {
+        let Some(t) = self.current() else { return };
+        let on = t.spec.loudness_match && t.spec.items.len() > 1;
+        let trims: Vec<f32> = t.spec.items.iter().map(|i| if on { mixer::trim_for(self.lufs(i), MATCH_LUFS) } else { 1.0 }).collect();
+        self.mixer.set_trims(trims);
+    }
+
+    /// The loudness used for matching: ours, which is what the trims are computed from.
+    pub fn lufs(&self, id: &str) -> Option<f64> {
+        self.items.get(id).and_then(|e| e.analysis.as_ref()).and_then(|a| a.lufs)
+    }
+
+    /// The trim, in dB, the match applies to a member of the active tab.
+    pub fn trim_db(&self, tab: &Tab, id: &str) -> Option<f64> {
+        if !tab.spec.loudness_match || tab.spec.items.len() < 2 {
+            return None;
+        }
+        self.lufs(id).map(|l| (MATCH_LUFS - l).min(12.0))
+    }
+
+    pub fn mixer_is_for(&self, tab: u64) -> bool {
+        self.mixer.owner() == Some(tab)
+    }
+
+    pub fn toggle_play(&mut self) {
+        self.sync_mixer();
+        self.mixer.toggle();
+        self.sync_videos(true);
+    }
+
+    pub fn set_active_member(&mut self, member: usize) {
+        let Some(t) = self.current_mut() else { return };
+        if member >= t.spec.items.len() {
+            return;
+        }
+        t.active = member;
+        self.mixer.set_active(member);
+    }
+
+    pub fn seek_secs(&mut self, s: f64) {
+        self.sync_mixer();
+        self.mixer.seek_secs(s);
+        self.sync_videos(true);
+    }
+
+    pub fn set_loop(&mut self, l: Option<(f64, f64)>) {
+        if let Some(t) = self.current_mut() {
+            t.loop_secs = l;
+        }
+        self.mixer.set_loop_secs(l);
+    }
+
+    /// Keeps each render tab's videos on the mixer's clock: playing with it, and re-seeked when
+    /// they drift more than 40 ms.
+    fn sync_videos(&mut self, force: bool) {
+        let Some(t) = self.current() else { return };
+        if t.spec.kind != TabKind::Render || !self.mixer_is_for(t.id()) {
+            return;
+        }
+        let pos = self.mixer.secs();
+        let playing = self.mixer.is_playing();
+        for v in &t.videos {
+            let drift = (v.time() - pos).abs();
+            if force || drift > 0.040 {
+                v.seek(pos);
             }
-            changed = true;
-            // For timing the deck by hand: `SLEEVE_AUTOPLAY=1` plays the first analysed local
-            // track once the library is in.
-            if std::env::var_os("SLEEVE_AUTOPLAY").is_some() && self.player.track.is_none() {
-                let pick = self.loaded().and_then(|l| {
-                    (0..self.rows.len()).find(|&i| {
-                        let r = self.rows[i];
-                        library::fields(&l.index, r).bpm_x100 > 0 && !crate::icloud::is_evicted(std::path::Path::new(l.index.folder_path.get(r as usize)))
-                    })
-                });
-                if let Some(i) = pick {
-                    let id = self.track_id(i);
-                    self.play_track(&id, Some(0.3), tx);
-                }
+            let state = v.state();
+            let is_playing = matches!(state, rune::PlayerState::Playing);
+            if playing && !is_playing {
+                v.play();
+            } else if !playing && is_playing {
+                v.pause();
             }
         }
-        changed |= self.player.tick();
-        changed |= self.land_deck_grid();
-        if let Some(rx) = &self.evicted_rx
-            && let Ok((generation, rows)) = rx.try_recv()
+    }
+
+    // Verdicts.
+
+    pub fn score(&mut self, value: i64) {
+        let Some(t) = self.current() else { return };
+        let member = t.active;
+        let Some(id) = t.spec.items.get(member).cloned() else { return };
+        let note = t.note.text.trim().to_owned();
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "score".into(), items: vec![id.clone()], value: Value::from(value), note, blind: t.spec.blind, reveal_map: None };
+        if self.write(row) {
+            self.scores.insert(id, value);
+            if let Some(t) = self.current_mut() {
+                t.note = TextEdit::new("");
+            }
+        }
+    }
+
+    /// Picks the member you're hearing as the better one. A blind tab reveals itself.
+    pub fn pick(&mut self) {
+        let Some(t) = self.current() else { return };
+        if t.spec.items.len() < 2 {
+            return;
+        }
+        let member = t.active;
+        let picked = t.spec.items[member].clone();
+        let reveal = t.spec.blind.then(|| {
+            let map: serde_json::Map<String, Value> = t.spec.items.iter().enumerate().map(|(m, id)| (t.member_label(m), Value::String(id.clone()))).collect();
+            Value::Object(map)
+        });
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "pick".into(), items: t.spec.items.clone(), value: Value::String(picked), note: t.note.text.trim().to_owned(), blind: t.spec.blind, reveal_map: reveal };
+        if self.write(row)
+            && let Some(t) = self.current_mut()
         {
-            self.evicted_rx = None;
-            if self.loaded().is_some_and(|l| l.generation == generation) {
-                self.evicted = rows;
+            t.picked = Some(member);
+            t.spec.revealed = true;
+            t.note = TextEdit::new("");
+            self.dirty = true;
+        }
+    }
+
+    /// A note with no score or pick.
+    pub fn note_only(&mut self) {
+        let Some(t) = self.current() else { return };
+        let note = t.note.text.trim().to_owned();
+        if note.is_empty() {
+            return;
+        }
+        let items = if t.spec.kind == TabKind::Run { t.table.selected().map(str::to_owned).collect() } else { t.spec.items.clone() };
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "note".into(), items, value: Value::Null, note, blind: t.spec.blind, reveal_map: None };
+        if self.write(row)
+            && let Some(t) = self.current_mut()
+        {
+            t.note = TextEdit::new("");
+        }
+    }
+
+    fn write(&mut self, row: Row) -> bool {
+        let run_dir = self.common_run_dir(&row.items);
+        match self.feedback.append(&row, run_dir) {
+            Ok(()) => {
+                self.toast = Some((format!("Saved {}", row.kind), false));
+                true
+            }
+            Err(e) => {
+                self.toast = Some((e, true));
+                false
+            }
+        }
+    }
+
+    /// The folder of the one local run all these items share, if they share one.
+    fn common_run_dir(&self, ids: &[String]) -> Option<PathBuf> {
+        let runs: HashSet<&str> = ids.iter().filter_map(|i| self.items.get(i)).filter(|e| !e.item.is_ref).filter_map(|e| e.item.run.as_deref()).collect();
+        if runs.len() != 1 {
+            return None;
+        }
+        let run = *runs.iter().next()?;
+        if run.starts_with("s3:") {
+            return None;
+        }
+        source::run_dir(&self.cfg, run)
+    }
+
+    // Run tabs.
+
+    /// The rows a run tab shows after its filter.
+    pub fn refilter(&mut self, tab: u64) {
+        let Some(t) = self.tab(tab) else { return };
+        let needle = t.filter.text.trim().to_ascii_lowercase();
+        let unscored = t.unscored_only;
+        let run = t.spec.run.clone();
+        let mut rows: Vec<String> = self
+            .items
+            .values()
+            .filter(|e| e.item.run.as_deref() == run.as_deref())
+            .filter(|e| !unscored || !self.scores.contains_key(&e.item.id))
+            .filter(|e| needle.is_empty() || e.item.name.to_ascii_lowercase().contains(&needle) || e.item.meta.iter().any(|(_, v)| v.to_ascii_lowercase().contains(&needle)))
+            .map(|e| e.item.id.clone())
+            .collect();
+        rows.sort();
+        let sort = t.table.sort().map(|(c, d)| (c.to_owned(), d));
+        if let Some((col, dir)) = sort {
+            rows.sort_by(|a, b| {
+                let (ea, eb) = (&self.items[a], &self.items[b]);
+                let (va, vb) = (crate::ui::run::cell_value(self, ea, &col), crate::ui::run::cell_value(self, eb, &col));
+                let o = match (va.parse::<f64>(), vb.parse::<f64>()) {
+                    (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                    _ => va.cmp(&vb),
+                };
+                dir.apply(o)
+            });
+        }
+        let filter_text = t.filter.text.clone();
+        if let Some(t) = self.tab_mut(tab) {
+            t.rows = rows;
+            t.spec.filter = (!filter_text.is_empty()).then_some(filter_text);
+        }
+        self.dirty = true;
+    }
+
+    /// Opens what's selected in a run tab: one item alone, several side by side.
+    pub fn open_selection(&mut self) {
+        let Some(t) = self.current() else { return };
+        let mut ids: Vec<String> = t.table.selected().map(str::to_owned).collect();
+        ids.sort_by_key(|i| t.rows.iter().position(|r| r == i));
+        match ids.len() {
+            0 => {}
+            1 => {
+                self.open(TabKind::Single, ids, None, false, true, None, None);
+            }
+            _ => {
+                ids.truncate(9);
+                self.open(TabKind::Compare, ids, None, false, true, None, None);
+            }
+        }
+    }
+
+    /// Files dropped on the window: one opens alone, several side by side.
+    pub fn open_files(&mut self, files: Vec<PathBuf>) {
+        let ids: Vec<String> = files.into_iter().filter(|p| crate::item::media_of(p).is_some()).map(|p| p.display().to_string()).collect();
+        let videos = ids.iter().all(|i| crate::item::media_of(std::path::Path::new(i)) == Some(Media::Video));
+        match ids.len() {
+            0 => self.toast = Some(("adeck opens audio and video files.".into(), true)),
+            _ if videos => {
+                self.open(TabKind::Render, ids, None, false, true, None, None);
+            }
+            1 => {
+                self.open(TabKind::Single, ids, None, false, true, None, None);
+            }
+            _ => {
+                self.open(TabKind::Compare, ids.into_iter().take(9).collect(), None, false, true, None, None);
+            }
+        }
+    }
+
+    // The frame.
+
+    pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        let mut changed = self.drain();
+        let (_, jobs_changed) = self.jobs.drain(clock);
+        changed |= jobs_changed;
+        changed |= self.mixer.tick();
+        if let Some(rx) = self.calls.take() {
+            while let Ok(call) = rx.try_recv() {
+                let result = self.call(&call.tool, &call.args);
+                let _ = call.reply.send(result);
                 changed = true;
             }
+            self.calls = Some(rx);
         }
-        if self.player.playing {
-            // The waveforms glide by themselves; only the readouts need the view, a few times a
-            // second.
-            let shown = self.deck_readout();
-            changed |= shown != self.shown;
-            self.shown = shown;
+        if self.mixer.is_playing() || self.mixer.is_loading() {
+            self.sync_videos(false);
             tx.wake_after(std::time::Duration::from_millis(33));
-        }
-        if let Some((_, rx)) = &self.mounts
-            && rx.try_iter().count() > 0
-        {
-            self.refresh_sticks();
-        }
-        if let Some(rx) = &self.sticks_rx
-            && let Ok(sticks) = rx.try_recv()
-        {
-            self.sticks = sticks;
-            self.sticks_rx = None;
             changed = true;
         }
-        let (finished, moved) = self.jobs.drain(clock);
-        changed |= moved;
-        if let Some((job, id, at)) = self.fetch.clone()
-            && finished.iter().any(|(f, _)| *f == job)
-        {
-            // Still in `fetch`, so nothing else was asked for since: this track is still wanted.
-            self.fetch = None;
-            let shown = self.player.fetching && self.player.is_on(&id);
-            if shown {
-                self.player.fetching = false;
-            }
-            match self.jobs.get(job).map(|j| j.phase.clone()) {
-                Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_), .. }) => {
-                    if let Some(row) = self.loaded().and_then(|l| l.index.row_of(&id)) {
-                        self.evicted.remove(&row);
-                    }
-                    self.play_track(&id, at, tx);
-                }
-                // The job's chip carries the error either way; the deck shows it too if it was
-                // showing this track.
-                Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Failed(why), .. }) if shown => self.player.error = Some(why),
-                Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Failed(_) | crate::jobs::Outcome::Stopped(_), .. } | crate::jobs::Phase::Running | crate::jobs::Phase::Stopping) | None => {}
-            }
-        }
-        self.take_created(&finished);
-        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Export | JobKind::Eject)) {
-            self.refresh_sticks();
-        }
-        let live: Vec<_> = self.jobs.list().iter().map(|j| j.id).collect();
-        self.export_targets.retain(|id, _| live.contains(id));
-        // Every song an import added gets analysed straight away, in a job of its own.
-        let imported: Vec<_> = self.imports.extract_if(.., |(job, _)| finished.iter().any(|(f, _)| f == job)).collect();
-        for (job, added) in imported {
-            let tracks = std::mem::take(&mut *added.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-            let completed = matches!(self.jobs.get(job).map(|j| &j.phase), Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_), .. }));
-            if completed && !tracks.is_empty() {
-                let title = if tracks.len() == 1 { format!("Analysing {}", tracks[0].title) } else { format!("Analysing {} new songs", tracks.len()) };
-                self.spawn_analysis(title, tracks);
-            }
-        }
-        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Analysis | JobKind::Edit | JobKind::Import)) {
-            self.start_reload();
-        }
-        // Keep "running 0:42" in the Activity panel ticking.
-        if self.activity_open && self.jobs.list().iter().any(crate::jobs::Job::is_active) {
-            tx.wake_after(std::time::Duration::from_secs(1));
+        if self.dirty {
+            self.dirty = false;
+            self.save();
         }
         changed
     }
 
-    /// Finds which tracks are only in iCloud, on a worker. A slow or stuck disk (a network
-    /// share gone quiet) holds up only the worker.
-    fn scan_evicted(&mut self) {
-        let Some(l) = self.loaded() else { return };
-        let (index, generation, waker) = (l.index.clone(), l.generation, self.waker.clone());
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            let rows: HashSet<Row> = (0..index.len()).filter(|&i| crate::icloud::is_evicted(std::path::Path::new(index.folder_path.get(i)))).map(|i| i as Row).collect();
-            if tx.send((generation, rows)).is_ok()
-                && let Some(w) = waker
-            {
-                w();
+    fn drain(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(e) = self.rx.try_recv() {
+            changed = true;
+            self.apply(e);
+        }
+        changed
+    }
+
+    fn apply(&mut self, e: Event) {
+        match e {
+            Event::Resolved { tab, id, result } => {
+                self.resolving.remove(&id);
+                match result {
+                    Ok(item) => {
+                        self.items.insert(id.clone(), Entry::new(item));
+                        self.analyse(&id);
+                        if self.tab(tab).is_some_and(|t| t.spec.kind == TabKind::Render) {
+                            self.make_videos(tab);
+                        }
+                        if self.active == Some(tab) {
+                            self.sync_mixer();
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(t) = self.tab_mut(tab) {
+                            t.error = Some(e.clone());
+                        }
+                        self.toast = Some((e, true));
+                    }
+                }
             }
-        });
-        self.evicted_rx = Some(rx);
-    }
-
-    /// The deck's clock (elapsed and left, in seconds) and bar.beat, as shown now.
-    fn deck_readout(&self) -> (u32, u32, i32, u16) {
-        let total = self.deck_duration_ms().unwrap_or(0.0);
-        let at = self.player.now() * total;
-        let grid = crate::deck::grid_pos(self.deck_beats(), at).map_or((0, 0), |g| (g.bar, g.beat));
-        ((at / 1000.0) as u32, ((total - at) / 1000.0).max(0.0) as u32, grid.0, grid.1)
-    }
-
-    fn land(&mut self, result: Result<Loaded, library::LoadError>) {
-        self.lib = match result {
-            Ok(l) => LibState::Ready(l),
-            Err(e) => LibState::Failed(e.to_string()),
-        };
-        self.refresh_tree();
-        self.scan_evicted();
-        self.land_created();
-        self.refresh_rows();
-        self.sync_artwork();
-        self.sync_deck_wave();
-    }
-
-    pub fn loaded(&self) -> Option<&Loaded> {
-        match &self.lib {
-            LibState::Ready(l) => Some(l),
-            _ => None,
-        }
-    }
-
-    pub fn refresh_tree(&mut self) {
-        self.tree = match &self.lib {
-            LibState::Ready(l) => library::playlist_tree(&l.index, &self.collapsed),
-            _ => Vec::new(),
-        };
-    }
-
-    /// Rebuilds the rows in view. Keeps the selection for tracks that are still there.
-    pub fn refresh_rows(&mut self) {
-        let Some(l) = self.loaded() else {
-            self.rows.clear();
-            return;
-        };
-        let view = library::open_view(&l.index, self.browse, &self.sort.0, self.sort.1, self.search.text.trim());
-        self.rows = view.window(0, view.len()).to_vec();
-    }
-
-    pub fn browse_to(&mut self, b: Browse, tx: &mut Tx) {
-        if self.browse == b {
-            return;
-        }
-        self.browse = b;
-        self.table.clear_selection();
-        self.refresh_rows();
-        // A new list starts at its top.
-        tx.scroll_to_instant("tracks", 0.0, 0.0);
-    }
-
-    pub fn set_sort(&mut self, col: &str, dir: SortDir) {
-        self.sort = (col.to_owned(), dir == SortDir::Descending);
-        self.table.set_sort(col, dir);
-        self.refresh_rows();
-    }
-
-    pub fn track_id(&self, i: usize) -> String {
-        match (self.loaded(), self.rows.get(i)) {
-            (Some(l), Some(&r)) => l.index.ids[r as usize].to_string(),
-            _ => String::new(),
-        }
-    }
-
-    /// The row of the track the cursor is on.
-    pub fn focused_row(&self) -> Option<Row> {
-        let l = self.loaded()?;
-        let id = self.table.cursor()?;
-        l.index.row_of(id)
-    }
-
-    pub fn selected_rows(&self) -> Vec<Row> {
-        let Some(l) = self.loaded() else { return Vec::new() };
-        let mut rows: Vec<Row> = self.table.selected().filter_map(|id| l.index.row_of(id)).collect();
-        // Keep the list's order, not the order they were clicked.
-        let pos: std::collections::HashMap<Row, usize> = self.rows.iter().enumerate().map(|(i, &r)| (r, i)).collect();
-        rows.sort_by_key(|r| pos.get(r).copied().unwrap_or(usize::MAX));
-        rows
-    }
-
-    /// Loads the artwork for the focused track, if it changed.
-    pub fn sync_artwork(&mut self) {
-        self.sync_wave();
-        let row = self.focused_row();
-        if self.artwork.as_ref().map(|a| a.0) == row {
-            return;
-        }
-        self.artwork = row.and_then(|r| self.artwork_for(r, 268.0).map(|i| (r, i)));
-    }
-
-    /// A track's cover, read on the image worker, drawn at `size` points.
-    pub fn artwork_for(&self, row: Row, size: f32) -> Option<rune::Image> {
-        let (l, cache) = (self.loaded()?, self.images.as_ref()?);
-        let rel = l.index.artwork_path.get(row as usize);
-        if rel.is_empty() || rel.contains("..") {
-            return None;
-        }
-        let mut path = l.location.share_root.clone();
-        path.extend(rel.split(['/', '\\']).filter(|p| !p.is_empty()));
-        let image = cache.file(&path, size, 2.0);
-        if rune::tooling::headless_run().is_some() {
-            // A snapshot shows the cover, not the moment before it decoded.
-            let _ = image.wait();
-        }
-        Some(image)
-    }
-
-    /// What Analyse would act on: the selection, re-analysed on purpose, or with nothing
-    /// selected only the tracks in view that have never been analysed. A click with nothing
-    /// selected must never redo grids someone fixed by hand.
-    pub fn analyse_rows(&self) -> Vec<Row> {
-        let sel = self.selected_rows();
-        if !sel.is_empty() {
-            return sel;
-        }
-        let Some(l) = self.loaded() else { return Vec::new() };
-        self.rows.iter().copied().filter(|&r| l.index.analysis_path.get(r as usize).is_empty()).collect()
-    }
-
-    /// Starts a job that analyses `analyse_rows`. Each press makes its own job with its own stop
-    /// button.
-    /// Clicking a job's chip: opens the Activity panel, with the log showing if the job failed
-    /// or logged a problem. Clicking it again closes the panel.
-    pub fn open_job(&mut self, id: crate::jobs::JobId) {
-        if self.activity_open && (self.log_open == Some(id) || self.log_open.is_none()) {
-            self.activity_open = false;
-            return;
-        }
-        self.activity_open = true;
-        let troubled = self.jobs.get(id).is_some_and(|j| {
-            matches!(j.phase, crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Failed(_), .. }) || j.log.iter().any(|l| l.level == crate::jobs::Level::Error)
-        });
-        if troubled {
-            self.log_open = Some(id);
-        }
-    }
-
-    fn spawn_analysis(&mut self, title: String, tracks: Vec<crate::analysis::Track>) {
-        let Some(l) = self.loaded() else { return };
-        let store = l.store.clone();
-        self.jobs.spawn(JobKind::Analysis, title, move |rep| crate::analysis::run(&store, tracks, rep));
-    }
-
-    /// Adds songs dropped from Finder to the library, and to `playlist` if it's given and is a
-    /// plain playlist. New songs are analysed when the import is done.
-    pub fn import(&mut self, files: Vec<std::path::PathBuf>, playlist: Option<u64>) {
-        self.drop_over = None;
-        let Some(l) = self.loaded() else { return };
-        let store = l.store.clone();
-        let target = playlist
-            .and_then(|id| self.tree.iter().find(|n| n.id == id && n.kind == crate::library::PlaylistKind::Playlist))
-            .map(|n| crate::import::Target { id: n.id, name: n.name.clone() });
-        let added = crate::import::Added::default();
-        let out = added.clone();
-        let title = target.as_ref().map_or_else(|| "Adding songs".to_owned(), |t| format!("Adding songs to {}", t.name));
-        let job = self.jobs.spawn(JobKind::Import, title, move |rep| crate::import::run(&store, &files, target.as_ref(), &out, rep));
-        self.imports.push((job, added));
-    }
-
-    /// The playlist a drop on the track list goes into: the one on screen, if it's a plain
-    /// playlist rather than a folder or a smart one.
-    pub fn drop_playlist(&self) -> Option<u64> {
-        match self.browse {
-            Browse::Playlist(id) => self.tree.iter().find(|n| n.id == id && n.kind == crate::library::PlaylistKind::Playlist).map(|n| n.id),
-            Browse::Collection => None,
-        }
-    }
-
-    pub fn analyse(&mut self) {
-        let Some(l) = self.loaded() else { return };
-        let rows = self.analyse_rows();
-        if rows.is_empty() {
-            return;
-        }
-        let tracks = crate::analysis::tracks(&l.index, &rows);
-        let title = if tracks.len() == 1 { format!("Analysing {}", tracks[0].title) } else { format!("Analysing {} tracks", tracks.len()) };
-        self.spawn_analysis(title, tracks);
-    }
-
-    fn sync_wave(&mut self) {
-        let row = self.focused_row();
-        let Some(l) = self.loaded() else {
-            self.wave = None;
-            return;
-        };
-        let generation = l.generation;
-        if self.wave.as_ref().map(|w| (w.0, w.1)) == row.map(|r| (r, generation)) {
-            return;
-        }
-        let Some(row) = row else {
-            self.wave = None;
-            return;
-        };
-        let pixels = rune::Pixels::new();
-        let rel = l.index.analysis_path.get(row as usize).to_owned();
-        crate::waveform::load_into(pixels.clone(), l.location.share_root.clone(), rel, crate::ui::inspector::WAVE_PX.0, crate::ui::inspector::WAVE_PX.1);
-        self.wave = Some((row, generation, pixels));
-    }
-
-    /// Plays or pauses the track in the details panel. `at` (0 to 1) starts it from there.
-    pub fn play_focused(&mut self, at: Option<f64>, tx: &mut Tx) {
-        if let Some(id) = self.table.cursor().map(str::to_owned) {
-            self.play_track(&id, at, tx);
-        }
-    }
-
-    /// Analyses just the track in the details panel, whatever else is selected.
-    pub fn analyse_focused(&mut self) {
-        let Some(row) = self.focused_row() else { return };
-        let Some(l) = self.loaded() else { return };
-        let tracks = crate::analysis::tracks(&l.index, &[row]);
-        let title = format!("Analysing {}", tracks[0].title);
-        self.spawn_analysis(title, tracks);
-    }
-
-    pub fn summary(&self) -> String {
-        match &self.lib {
-            LibState::Loading => "Opening your library…".into(),
-            LibState::Failed(e) => e.clone(),
-            LibState::Ready(l) => {
-                let sel = self.selected_rows();
-                let secs = |rows: &[Row]| rows.iter().map(|&r| u64::from(l.index.length_sec[r as usize])).sum::<u64>();
-                if sel.len() > 1 {
-                    format!("{} of {} selected · {}", crate::ui::sidebar::thousands(sel.len()), crate::ui::sidebar::thousands(self.rows.len()), library::long_duration(secs(&sel)))
-                } else {
-                    let n = self.rows.len();
-                    let noun = if n == 1 { "track" } else { "tracks" };
-                    format!("{} {noun} · {}", crate::ui::sidebar::thousands(n), library::long_duration(secs(&self.rows)))
+            Event::Analysed { id, result } => {
+                let Some(entry) = self.items.get_mut(&id) else { return };
+                entry.analysing = false;
+                match result {
+                    Ok((a, spec)) => {
+                        let (w, h) = (2000usize, 160usize);
+                        entry.wave.set(w as u32, h as u32, crate::ui::widgets::paint_wave(&a.envelope, w, h));
+                        entry.spec.set(a.spec_w, a.spec_h, spec);
+                        entry.analysis = Some(a);
+                        if self.current().is_some_and(|t| t.spec.items.contains(&id)) {
+                            self.apply_trims();
+                        }
+                    }
+                    Err(e) => entry.failed = Some(e),
+                }
+            }
+            Event::Listed { tab, result } => match result {
+                Ok(items) => {
+                    for it in items {
+                        if !self.items.contains_key(&it.id) {
+                            let id = it.id.clone();
+                            self.items.insert(id, Entry::new(it));
+                        }
+                    }
+                    if let Some(t) = self.tab_mut(tab) {
+                        t.loading = false;
+                    }
+                    self.refilter(tab);
+                }
+                Err(e) => {
+                    if let Some(t) = self.tab_mut(tab) {
+                        t.loading = false;
+                        t.error = Some(e.clone());
+                    }
+                    self.toast = Some((e, true));
+                }
+            },
+            Event::Earshot { id, cmd, result } => {
+                let Some(entry) = self.items.get_mut(&id) else { return };
+                entry.earshot_busy.remove(cmd.name());
+                match result {
+                    Ok(v) => {
+                        entry.earshot.insert(cmd.name(), v);
+                    }
+                    Err(e) => self.toast = Some((e, true)),
+                }
+            }
+            Event::Sheet { id, result } => {
+                let Some(entry) = self.items.get_mut(&id) else { return };
+                entry.earshot_busy.remove("sheet");
+                match result.and_then(|p| derive::read_png(&p).ok_or_else(|| "The sheet PNG didn't decode.".to_owned())) {
+                    Ok((w, h, rgba)) => {
+                        let px = Pixels::new();
+                        px.set(w, h, rgba);
+                        entry.sheet = Some(px);
+                    }
+                    Err(e) => self.toast = Some((e, true)),
                 }
             }
         }
+    }
+
+    fn make_videos(&mut self, tab: u64) {
+        let paths: Vec<Option<PathBuf>> = match self.tab(tab) {
+            Some(t) => t.spec.items.iter().map(|i| self.items.get(i).map(|e| e.item.path.clone())).collect(),
+            None => return,
+        };
+        if paths.iter().any(Option::is_none) {
+            return;
+        }
+        let videos: Vec<rune::Player> = paths
+            .into_iter()
+            .flatten()
+            .map(|p| {
+                let v = rune::Player::file(p.display().to_string());
+                v.set_muted(true);
+                v
+            })
+            .collect();
+        if let Some(t) = self.tab_mut(tab) {
+            t.videos = videos;
+        }
+    }
+
+    /// In a headless run, waits for every worker so the first frame is complete.
+    fn settle(&mut self) {
+        for _ in 0..4 {
+            self.drain();
+        }
+    }
+
+    /// `settle`, for scenes and tests.
+    pub fn settle_now(&mut self) {
+        self.settle();
+    }
+
+    /// Blind on: shuffle and hide. Off (only before a pick): show names again.
+    pub fn toggle_blind(&mut self) {
+        let Some(t) = self.current_mut() else { return };
+        if t.spec.revealed {
+            return;
+        }
+        t.spec.blind ^= true;
+        if t.spec.blind {
+            t.spec.order = shuffle(t.spec.items.len(), t.spec.id);
+        }
+        self.dirty = true;
+    }
+
+    pub fn toggle_loudness_match(&mut self) {
+        if let Some(t) = self.current_mut() {
+            t.spec.loudness_match ^= true;
+        }
+        self.apply_trims();
+        self.dirty = true;
+    }
+
+    // The session: every tab's spec and the active one, saved on each change.
+
+    fn session_path() -> PathBuf {
+        std::env::var_os("ADECK_SESSION").map_or_else(|| crate::config::dir().join("session.json"), PathBuf::from)
+    }
+
+    pub fn save(&self) {
+        if self.headless {
+            return;
+        }
+        let specs: Vec<&TabSpec> = self.tabs.iter().map(|t| &t.spec).collect();
+        let v = json!({ "tabs": specs, "active": self.active, "next_tab": self.next_tab });
+        let path = App::session_path();
+        if let Some(d) = path.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, serde_json::to_vec_pretty(&v).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+
+    fn restore(&mut self) {
+        let Ok(bytes) = std::fs::read(App::session_path()) else { return };
+        let Ok(v) = serde_json::from_slice::<Value>(&bytes) else { return };
+        let specs: Vec<TabSpec> = serde_json::from_value(v["tabs"].clone()).unwrap_or_default();
+        self.next_tab = v["next_tab"].as_u64().unwrap_or(1).max(specs.iter().map(|s| s.id + 1).max().unwrap_or(1));
+        // A headless shot of one tab loads only that tab.
+        let focus: Option<u64> = std::env::var("ADECK_FOCUS").ok().and_then(|s| s.parse().ok());
+        for spec in specs {
+            if self.headless && focus.is_some_and(|f| f != spec.id) {
+                continue;
+            }
+            let id = spec.id;
+            self.tabs.push(Tab::new(spec));
+            self.load_tab(id);
+        }
+        self.active = focus.or_else(|| v["active"].as_u64()).filter(|a| self.tab(*a).is_some()).or_else(|| self.tabs.first().map(Tab::id));
+    }
+
+    // Tools: what the MCP server asks for, answered on the UI thread.
+
+    pub fn call(&mut self, tool: &str, a: &Value) -> Result<Value, String> {
+        let s = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_owned);
+        let ids = |k: &str| -> Vec<String> { a.get(k).and_then(Value::as_array).map(|xs| xs.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default() };
+        let tab_arg = || a.get("tab_id").and_then(Value::as_u64);
+        match tool {
+            "list_runs" => {
+                let mut runs = source::list_runs(&self.cfg);
+                if a.get("include_s3").and_then(Value::as_bool).unwrap_or(false) {
+                    runs.extend(source::list_s3_runs(&self.cfg)?);
+                }
+                Ok(json!({ "runs": runs }))
+            }
+            "list_items" => {
+                let run = s("run").ok_or("run is required")?;
+                let filter = s("filter").map(|f| f.to_ascii_lowercase());
+                let items = source::list_items(&self.cfg, &run)?;
+                let rows: Vec<Value> = items
+                    .iter()
+                    .filter(|i| filter.as_ref().is_none_or(|f| i.name.to_ascii_lowercase().contains(f) || i.meta.iter().any(|(_, v)| v.to_ascii_lowercase().contains(f))))
+                    .map(|i| json!({ "id": i.id, "name": i.name, "summary": i.subtitle(), "score": self.scores.get(&i.id) }))
+                    .collect();
+                Ok(json!({ "run": run, "count": rows.len(), "items": rows }))
+            }
+            "get_item" => {
+                let id = s("id").ok_or("id is required")?;
+                let item = match self.items.get(&id) {
+                    Some(e) => e.item.clone(),
+                    None => source::resolve(&self.cfg, &id)?,
+                };
+                let analysis = self.items.get(&id).and_then(|e| e.analysis.clone()).or_else(|| derive::analyse(&item.path).ok().map(|(a, _)| a));
+                let earshot: serde_json::Map<String, Value> = [Earshot::Describe, Earshot::Measure, Earshot::Critique]
+                    .into_iter()
+                    .filter_map(|c| derive::earshot_cached(&item.path, c).map(|v| (c.name().to_owned(), summarise_earshot(c, &v))))
+                    .collect();
+                let mut v = item.to_json();
+                v["analysis"] = analysis.map_or(Value::Null, |a| a.to_json());
+                v["earshot"] = Value::Object(earshot);
+                v["score"] = self.scores.get(&id).map_or(Value::Null, |s| Value::from(*s));
+                Ok(v)
+            }
+            "open_single" => {
+                let item = s("item").ok_or("item is required")?;
+                let id = self.open(TabKind::Single, vec![item], s("label"), false, true, None, None);
+                if let Some(n) = s("note") {
+                    self.annotate(id, n);
+                }
+                Ok(self.tab_json(id))
+            }
+            "open_compare" => {
+                let items = ids("items");
+                if items.len() < 2 {
+                    return Err("open_compare needs at least 2 items.".into());
+                }
+                if items.len() > 9 {
+                    return Err("open_compare takes at most 9 items (keys 1-9 switch).".into());
+                }
+                let blind = a.get("blind").and_then(Value::as_bool).unwrap_or(false);
+                let lm = a.get("loudness_match").and_then(Value::as_bool).unwrap_or(true);
+                let id = self.open(TabKind::Compare, items, s("label"), blind, lm, None, None);
+                if let Some(n) = s("note") {
+                    self.annotate(id, n);
+                }
+                Ok(self.tab_json(id))
+            }
+            "open_render" => {
+                let items = ids("items");
+                if items.is_empty() {
+                    return Err("open_render needs at least 1 item.".into());
+                }
+                let id = self.open(TabKind::Render, items, s("label"), false, a.get("loudness_match").and_then(Value::as_bool).unwrap_or(false), None, None);
+                if let Some(n) = s("note") {
+                    self.annotate(id, n);
+                }
+                Ok(self.tab_json(id))
+            }
+            "open_run" => {
+                let run = s("run").ok_or("run is required")?;
+                let label = s("label").or_else(|| Some(run.clone()));
+                let id = self.open(TabKind::Run, Vec::new(), label, false, true, Some(run), s("filter"));
+                Ok(self.tab_json(id))
+            }
+            "list_tabs" => Ok(json!({ "active": self.active, "tabs": self.tabs.iter().map(|t| self.tab_json(t.id())).collect::<Vec<_>>() })),
+            "focus_tab" => {
+                let id = tab_arg().ok_or("tab_id is required")?;
+                self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
+                self.focus(id);
+                Ok(self.tab_json(id))
+            }
+            "close_tab" => {
+                let id = tab_arg().ok_or("tab_id is required")?;
+                self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
+                self.close(id);
+                Ok(json!({ "closed": id }))
+            }
+            "annotate_tab" => {
+                let id = tab_arg().ok_or("tab_id is required")?;
+                self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
+                self.annotate(id, s("markdown").unwrap_or_default());
+                Ok(self.tab_json(id))
+            }
+            "play" => {
+                let id = tab_arg().or(self.active).ok_or("No tab is open.")?;
+                self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
+                self.focus(id);
+                if let Some(m) = a.get("member").and_then(Value::as_u64) {
+                    self.set_active_member(m as usize);
+                }
+                if let Some(at) = a.get("at_s").and_then(Value::as_f64) {
+                    self.seek_secs(at);
+                }
+                self.sync_mixer();
+                self.mixer.play();
+                self.sync_videos(true);
+                Ok(json!({ "playing": true, "tab_id": id, "loading": self.mixer.is_loading() }))
+            }
+            "stop" => {
+                self.mixer.pause();
+                self.sync_videos(true);
+                Ok(json!({ "playing": false, "at_s": self.mixer.secs() }))
+            }
+            "set_loop" => {
+                let id = tab_arg().or(self.active).ok_or("No tab is open.")?;
+                self.focus(id);
+                match (a.get("start_s").and_then(Value::as_f64), a.get("end_s").and_then(Value::as_f64)) {
+                    (Some(x), Some(y)) if y > x => self.set_loop(Some((x, y))),
+                    _ => self.set_loop(None),
+                }
+                Ok(self.tab_json(id))
+            }
+            "get_feedback" => {
+                let rows = self.feedback.read_all();
+                let mut items = ids("items");
+                if let Some(run) = s("run") {
+                    items.extend(self.items.values().filter(|e| e.item.run.as_deref() == Some(run.as_str())).map(|e| e.item.id.clone()));
+                    if items.is_empty() {
+                        items.extend(source::list_items(&self.cfg, &run).unwrap_or_default().into_iter().map(|i| i.id));
+                    }
+                }
+                let since = a.get("since").and_then(Value::as_f64).unwrap_or(0.0);
+                Ok(json!({ "rows": feedback::select(&rows, tab_arg(), &items, since) }))
+            }
+            "_item_path" => {
+                let id = s("id").ok_or("id is required")?;
+                let path = match self.items.get(&id) {
+                    Some(e) => e.item.path.clone(),
+                    None => source::resolve(&self.cfg, &id)?.path,
+                };
+                Ok(json!({ "path": path }))
+            }
+            "_earshot_done" => {
+                if let (Some(id), Some(cmd)) = (s("id"), s("kind").as_deref().and_then(Earshot::parse))
+                    && let (Some(e), Some(v)) = (self.items.get_mut(&id), a.get("result"))
+                {
+                    e.earshot.insert(cmd.name(), v.clone());
+                }
+                Ok(Value::Null)
+            }
+            "_save" => {
+                self.save();
+                Ok(json!({ "active": self.active }))
+            }
+            other => Err(format!("No tool {other}.")),
+        }
+    }
+
+    pub fn annotate(&mut self, id: u64, md: String) {
+        if let Some(t) = self.tab_mut(id) {
+            t.spec.note = (!md.trim().is_empty()).then_some(md);
+        }
+        self.dirty = true;
+    }
+
+    pub fn tab_json(&self, id: u64) -> Value {
+        let Some(t) = self.tab(id) else { return Value::Null };
+        let members: Vec<Value> = t
+            .spec
+            .items
+            .iter()
+            .enumerate()
+            .map(|(m, i)| {
+                let e = self.items.get(i);
+                let hidden = t.is_blind_hidden();
+                json!({
+                    "member": m,
+                    "label": t.member_label(m),
+                    "id": if hidden { Value::Null } else { Value::String(i.clone()) },
+                    "ready": e.is_some_and(|e| e.analysis.is_some()),
+                    "lufs": e.and_then(|e| e.analysis.as_ref()).and_then(|a| a.lufs).map(|l| (l * 10.0).round() / 10.0),
+                    "trim_db": self.trim_db(t, i).map(|d| (d * 10.0).round() / 10.0),
+                })
+            })
+            .collect();
+        json!({
+            "tab_id": t.id(),
+            "kind": t.spec.kind,
+            "label": t.spec.label,
+            "blind": t.spec.blind,
+            "revealed": t.spec.revealed,
+            "loudness_match": t.spec.loudness_match,
+            "members": members,
+            "run": t.spec.run,
+            "rows": if t.spec.kind == TabKind::Run { Value::from(t.rows.len()) } else { Value::Null },
+            "active_member": t.active,
+            "loop": t.loop_secs,
+            "note": t.spec.note,
+            "error": t.error,
+        })
+    }
+
+    /// The status bar's left side.
+    pub fn summary(&self) -> String {
+        match self.current() {
+            None => "No tabs. Ask your LLM to open something, or drop files here.".into(),
+            Some(t) if t.spec.kind == TabKind::Run => format!("{} items", t.rows.len()),
+            Some(t) => {
+                let ready = t.spec.items.iter().filter(|i| self.items.get(*i).is_some_and(|e| e.analysis.is_some())).count();
+                if ready < t.spec.items.len() { format!("Analysing {}/{}…", ready, t.spec.items.len()) } else { format!("{} file{}", ready, if ready == 1 { "" } else { "s" }) }
+            }
+        }
+    }
+}
+
+/// A fixed shuffle for a blind tab, seeded by its id so a restored session keeps it.
+fn shuffle(n: usize, seed: u64) -> Vec<usize> {
+    let mut v: Vec<usize> = (0..n).collect();
+    let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ feedback::now().to_bits();
+    for i in (1..n).rev() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let j = (x % (i as u64 + 1)) as usize;
+        v.swap(i, j);
+    }
+    v
+}
+
+/// The few numbers of an earshot result worth handing a model.
+pub fn summarise_earshot(cmd: Earshot, v: &Value) -> Value {
+    match cmd {
+        Earshot::Critique => json!({
+            "verdict": v.get("verdict"), "score": v.get("score"),
+            "critical": v.get("critical_issues"), "major": v.get("major_issues"),
+            "actions": v.get("actions").and_then(Value::as_array).map(|a| a.iter().take(5).filter_map(|x| x.get("action").cloned()).collect::<Vec<_>>()),
+        }),
+        Earshot::Describe => {
+            let mut out = serde_json::Map::new();
+            if let Some(o) = v.as_object() {
+                for (k, x) in o {
+                    if matches!(k.as_str(), "tags" | "labels" | "summary" | "description" | "caption" | "audioset" | "categories") {
+                        out.insert(k.clone(), x.clone());
+                    }
+                }
+            }
+            if out.is_empty() { v.clone() } else { Value::Object(out) }
+        }
+        _ => v.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shuffle_is_a_permutation() {
+        for n in 1..9 {
+            let mut s = shuffle(n, n as u64);
+            s.sort_unstable();
+            assert_eq!(s, (0..n).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn blind_labels_are_letters_in_shown_order() {
+        let spec = TabSpec { id: 1, kind: TabKind::Compare, items: vec!["a".into(), "b".into(), "c".into()], label: None, blind: true, loudness_match: true, note: None, run: None, filter: None, order: vec![2, 0, 1], revealed: false };
+        let t = Tab::new(spec);
+        assert_eq!(t.member_label(2), "X");
+        assert_eq!(t.member_label(0), "Y");
+        assert_eq!(t.member_label(1), "Z");
     }
 }
