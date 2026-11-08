@@ -61,6 +61,19 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .child(spacer())
         .child(chips)
         .child(
+            IconButton::new(&icons::SHARE)
+                .variant(IconButtonVariant::Ghost)
+                .label(if s.sharing { "Sharing…" } else { "Share this tab as a web page · ⌘⇧E" })
+                .disabled(s.sharing || !s.can_share())
+                .on_press(|s: &mut App| {
+                    if let Err(e) = s.share() {
+                        s.toast = Some((e, true));
+                    }
+                })
+                .build(k)
+                .key("share"),
+        )
+        .child(
             IconButton::new(&icons::CAMERA)
                 .variant(IconButtonVariant::Ghost)
                 .label(if s.shooting { "Taking the screenshot…" } else { "Screenshot this tab, framed, to ~/Pictures/adeck and the clipboard · ⌘⇧S" })

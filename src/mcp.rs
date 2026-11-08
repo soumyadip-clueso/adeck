@@ -167,6 +167,8 @@ fn call_tool(name: &str, args: &Value, ctx: &Ctx) -> Value {
             Err(e) => text_result(Err(e)),
         },
         "analyze" => text_result(analyze(args, ctx)),
+        "share_tab" => text_result(share_tab(args, ctx)),
+        "unshare" => text_result(unshare(args, ctx)),
         "list_runs" | "list_items" | "get_item" => {
             let scores = feedback::latest_scores(&feedback::read(&ctx.feedback_path));
             text_result(crate::app::read_tool(&ctx.cfg, &scores, name, args))
@@ -210,6 +212,25 @@ fn screenshot(args: &Value, ctx: &Ctx) -> Result<Vec<u8>, String> {
         return Ok(png);
     }
     crate::shot::render(tab, &size, theme, 1)
+}
+
+/// Publishes a tab as a page, on this thread (it uploads), and records it in the app.
+fn share_tab(args: &Value, ctx: &Ctx) -> Result<Value, String> {
+    let v = ctx.ui("_export", args.clone())?;
+    let files: Vec<(PathBuf, String)> = serde_json::from_value(v["files"].clone()).map_err(|e| e.to_string())?;
+    let x = crate::share::Export { title: v["title"].as_str().unwrap_or("adeck").to_owned(), page: v["page"].clone(), files };
+    let sh = crate::share::publish(x, &ctx.cfg.share, &ctx.cfg.aws)?;
+    ctx.ui("_shared", serde_json::to_value(&sh).map_err(|e| e.to_string())?)?;
+    Ok(json!({"url": sh.url, "slug": sh.slug, "files": sh.files}))
+}
+
+fn unshare(args: &Value, ctx: &Ctx) -> Result<Value, String> {
+    let slug = args.get("slug").and_then(Value::as_str).ok_or("slug is required")?;
+    let all = ctx.ui("list_shares", json!({}))?;
+    let sh: crate::share::Share = all["shares"].as_array().and_then(|a| a.iter().find(|s| s["slug"] == slug)).and_then(|s| serde_json::from_value(s.clone()).ok()).ok_or_else(|| format!("No share {slug}."))?;
+    crate::share::remove(&sh, &ctx.cfg.share, &ctx.cfg.aws)?;
+    ctx.ui("_unshared", json!({"slug": slug}))?;
+    Ok(json!({"removed": slug}))
 }
 
 fn analyze(args: &Value, ctx: &Ctx) -> Result<Value, String> {
@@ -386,6 +407,15 @@ pub fn tools() -> Vec<Value> {
             json!({"tab_id": tab, "size": {"type": "string", "description": "WxH in points, default 1280x800."}, "theme": {"type": "string", "enum": ["dark", "light"]}, "pretty": {"type": "boolean", "description": "Framed at 2x on a backdrop for sharing; also saved to ~/Pictures/adeck and copied."}}),
             &[],
         ),
+        tool(
+            "share_tab",
+            "Publish a tab as a web page (players, waveforms, numbers) and return its url. Reference-pack audio is never uploaded; those members show as local-only. Needs [share] in the config.",
+            json!({"tab_id": tab}),
+            &[],
+        ),
+        tool("list_shares", "Every page shared from adeck: slug, title, url, when, where its audio went, and whether it's been taken down.", json!({}), &[]),
+        tool("open_shared", "Open the Shared tab: every shared page, to open or take down.", json!({}), &[]),
+        tool("unshare", "Take a shared page down: deletes the page and its audio.", json!({"slug": {"type": "string"}}), &["slug"]),
         tool(
             "get_feedback",
             "The user's verdicts: scores, picks (with the blind reveal), ranks and notes. Filter by tab, run or items; since is unix seconds.",

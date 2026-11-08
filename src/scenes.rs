@@ -492,6 +492,44 @@ mod tests {
     }
 
     #[test]
+    fn sharing_publishes_a_page_without_local_paths_or_reference_audio() {
+        let mut rt = rt(compare);
+        let dir = std::env::temp_dir().join(format!("adeck-pub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("pub.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nd=$(dirname \"$0\")\ncase \"$1\" in\n  publish) cp -R \"$2\" \"$d/$3\"; echo \"{\\\"url\\\": \\\"https://pages.test/$3\\\"}\";;\n  remove) rm -rf \"$d/$2\"; echo '{}';;\n  list) echo '[]';;\nesac\n",
+        )
+        .unwrap();
+        std::process::Command::new("chmod").arg("755").arg(&script).status().unwrap();
+        let ids = rt.state.current().unwrap().spec.items.clone();
+        let home = rt.state.entry(&ids[0]).unwrap().item.path.parent().unwrap().display().to_string();
+        rt.state.items.get_mut(&ids[2]).unwrap().item.is_ref = true;
+        rt.state.cfg.share.command = script.display().to_string();
+        rt.state.share().unwrap();
+        rt.state.settle_now();
+        let sh = rt.state.shares.first().cloned().unwrap_or_else(|| panic!("not recorded: {:?}", rt.state.toast));
+        assert!(sh.url.starts_with("https://pages.test/adeck-tones-vs-whoosh-"), "{}", sh.url);
+        let out = dir.join(&sh.slug);
+        let html = std::fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(!html.contains(&home) && !html.contains("/Users/"), "no local paths on the page");
+        assert!(html.contains("\"peaks\":[") && html.contains("audio/00-"), "waveforms and audio links are in");
+        assert_eq!(std::fs::read_dir(out.join("audio")).unwrap().count(), 2, "the reference stays home");
+        rt.state.unshare(&sh.slug, false);
+        assert_eq!(rt.state.confirm_unshare.as_deref(), Some(sh.slug.as_str()), "the first press only asks");
+        rt.state.unshare(&sh.slug, false);
+        for _ in 0..200 {
+            rt.state.settle_now();
+            if rt.state.shares.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(rt.state.shares.is_empty() && !out.exists(), "taken down");
+    }
+
+    #[test]
     fn dragging_across_the_waveform_scrubs() {
         let mut rt = rt(single);
         let (x, y) = rt.find("wave").expect("wave");

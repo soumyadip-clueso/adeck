@@ -37,6 +37,8 @@ pub enum TabKind {
     Run,
     Board,
     Diff,
+    /// Every page shared from adeck, to open or take down.
+    Shared,
 }
 
 /// What a tab is, as the session file and the tools see it.
@@ -296,6 +298,9 @@ pub enum Event {
     Earshot { id: String, cmd: Earshot, result: Result<Value, String> },
     Sheet { id: String, result: Result<PathBuf, String> },
     Shot { result: Result<PathBuf, String> },
+    Shared { result: Result<crate::share::Share, String> },
+    Unshared { slug: String, result: Result<(), String> },
+    Live { result: Result<Vec<String>, String> },
 }
 
 pub struct App {
@@ -332,6 +337,14 @@ pub struct App {
     /// The window's size and theme as last drawn, for screenshots.
     pub win: std::cell::Cell<(f32, f32, bool)>,
     pub shooting: bool,
+    /// Pages shared from adeck, newest first.
+    pub shares: Vec<crate::share::Share>,
+    /// A share being published; slugs being taken down; the slug whose take-down awaits a second press.
+    pub sharing: bool,
+    pub unsharing: HashSet<String>,
+    pub confirm_unshare: Option<String>,
+    /// Whether the publisher has been asked which shares are still up, and what it said.
+    pub shares_checked: Option<Result<(), String>>,
     dirty: bool,
     pub headless: bool,
 }
@@ -377,6 +390,11 @@ impl App {
             sheet_w: 480.0,
             win: std::cell::Cell::new((1280.0, 800.0, true)),
             shooting: false,
+            shares: crate::share::load(),
+            sharing: false,
+            unsharing: HashSet::new(),
+            confirm_unshare: None,
+            shares_checked: None,
             dirty: false,
             headless,
         };
@@ -455,7 +473,10 @@ impl App {
     fn load_tab(&mut self, id: u64) {
         let Some(t) = self.tab(id) else { return };
         let (kind, mut items, run) = (t.spec.kind, t.spec.items.clone(), t.spec.run.clone());
-        if kind == TabKind::Diff {
+        if matches!(kind, TabKind::Diff | TabKind::Shared) {
+            if kind == TabKind::Shared {
+                self.check_shares();
+            }
             return;
         }
         if let Some(b) = t.board() {
@@ -656,7 +677,7 @@ impl App {
     /// Puts the active tab's members on the mixer once they're all resolved.
     pub fn sync_mixer(&mut self) {
         let Some(t) = self.current() else { return };
-        if matches!(t.spec.kind, TabKind::Run | TabKind::Diff) || self.headless {
+        if matches!(t.spec.kind, TabKind::Run | TabKind::Diff | TabKind::Shared) || self.headless {
             return;
         }
         let tab = t.id();
@@ -1441,6 +1462,153 @@ impl App {
         }
     }
 
+    /// Publishes the front tab as a page. Reference-pack audio never leaves: those members show
+    /// as local-only on the page.
+    pub fn share(&mut self) -> Result<(), String> {
+        if self.sharing {
+            return Err("A share is already on its way.".into());
+        }
+        let x = self.export().ok_or("This tab can't be shared: open a compare, a single file, a render or a board.")?;
+        self.sharing = true;
+        let (cfg, aws) = (self.cfg.share.clone(), self.cfg.aws.clone());
+        let (tx, waker) = (self.tx.clone(), self.waker.clone());
+        let work = move || {
+            let result = crate::share::publish(x, &cfg, &aws);
+            let _ = tx.send(Event::Shared { result });
+            if let Some(w) = waker {
+                w();
+            }
+        };
+        if self.headless {
+            work();
+        } else {
+            std::thread::spawn(work);
+        }
+        Ok(())
+    }
+
+    /// Whether the front tab is a kind that shares (cheap: for the footer button).
+    pub fn can_share(&self) -> bool {
+        self.current().is_some_and(|t| !matches!(t.spec.kind, TabKind::Run | TabKind::Diff | TabKind::Shared))
+    }
+
+    /// The front tab as page data: one group per board group (or the tab's members as one).
+    pub fn export(&self) -> Option<crate::share::Export> {
+        let t = self.current()?;
+        if matches!(t.spec.kind, TabKind::Run | TabKind::Diff | TabKind::Shared) {
+            return None;
+        }
+        let title = crate::ui::tab_title(self, t);
+        let mut files: Vec<(PathBuf, String)> = Vec::new();
+        let mut member = |id: &str, label: String, role: &str, numbers: Value, chip: Value, meta: serde_json::Map<String, Value>| {
+            let e = self.items.get(id);
+            let is_ref = id.starts_with("ref:") || e.is_some_and(|e| e.item.is_ref);
+            let src = match e.filter(|_| !is_ref) {
+                Some(e) => {
+                    let name = format!("{:02}-{}", files.len(), crate::share::slug("", &e.item.name).rsplit_once('-').map_or("", |x| x.0));
+                    files.push((e.item.path.clone(), name.clone()));
+                    Value::String(name)
+                }
+                None => Value::Null,
+            };
+            let role = if is_ref && role.is_empty() { "ref" } else { role };
+            // A pack file's own name stays home too.
+            let label = if is_ref { label.split_once(" · ").map_or_else(|| "Reference".to_owned(), |(l, _)| format!("{l} · Reference")) } else { label };
+            serde_json::json!({"label": label, "role": role, "numbers": numbers, "chip": chip, "meta": meta, "src": src})
+        };
+        let (groups, layout, labels) = match t.board() {
+            Some(b) => {
+                let layout = if b.is_pads() { "pads" } else { "strips" };
+                let groups: Vec<Value> = b
+                    .sorted()
+                    .into_iter()
+                    .map(|g| {
+                        let hidden = t.group_hidden(&g.key);
+                        let members: Vec<Value> = t
+                            .group_order(g)
+                            .into_iter()
+                            .map(|i| {
+                                let m = &g.members[i];
+                                let meta = if hidden { serde_json::Map::new() } else { crate::share::public_meta(m.meta.iter().map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned)))) };
+                                let nums = if hidden { Value::Object(serde_json::Map::new()) } else { serde_json::to_value(&m.numbers).unwrap_or_default() };
+                                let chip = if hidden { Value::Null } else { serde_json::to_value(&m.chip).unwrap_or_default() };
+                                member(&m.item, t.board_label(g, i), if hidden { "" } else { &m.role }, nums, chip, meta)
+                            })
+                            .collect();
+                        serde_json::json!({"title": g.title(), "subtitle": g.subtitle, "chip": g.chip, "layout": layout, "members": members})
+                    })
+                    .collect();
+                let labels: serde_json::Map<String, Value> = b.metrics.iter().filter_map(|m| m.label.clone().map(|l| (m.key.clone(), Value::String(l)))).collect();
+                (groups, layout, labels)
+            }
+            None => {
+                let members: Vec<Value> = t
+                    .shown()
+                    .into_iter()
+                    .filter_map(|i| {
+                        let id = t.spec.items.get(i)?;
+                        let name = self.items.get(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |e| e.item.name.clone());
+                        let label = if t.spec.items.len() > 1 { if t.is_blind_hidden() { t.member_label(i) } else { format!("{} · {name}", t.member_label(i)) } } else { name };
+                        let meta = if t.is_blind_hidden() { serde_json::Map::new() } else { crate::share::public_meta(self.items.get(id).map(|e| e.item.meta.clone()).unwrap_or_default()) };
+                        Some(member(id, label, "", Value::Object(serde_json::Map::new()), Value::Null, meta))
+                    })
+                    .collect();
+                (vec![serde_json::json!({"title": title, "layout": "strips", "members": members})], "strips", serde_json::Map::new())
+            }
+        };
+        let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let page = serde_json::json!({"title": title, "note": t.spec.note, "created": created, "layout": layout, "labels": labels, "groups": groups});
+        Some(crate::share::Export { title, page, files })
+    }
+
+    /// Asks the publisher which shares are still up; ones taken down elsewhere get marked and
+    /// their S3 audio cleared.
+    pub fn check_shares(&mut self) {
+        if self.cfg.share.command().is_none() || self.headless {
+            self.shares_checked = Some(Ok(()));
+            return;
+        }
+        let cfg = self.cfg.share.clone();
+        let (tx, waker) = (self.tx.clone(), self.waker.clone());
+        self.shares_checked = None;
+        std::thread::spawn(move || {
+            let _ = tx.send(Event::Live { result: crate::share::live(&cfg) });
+            if let Some(w) = waker {
+                w();
+            }
+        });
+    }
+
+    /// Takes a share down: the page and its audio. The first press asks; the second does it.
+    pub fn unshare(&mut self, slug: &str, confirmed: bool) {
+        if !confirmed && self.confirm_unshare.as_deref() != Some(slug) {
+            self.confirm_unshare = Some(slug.to_owned());
+            return;
+        }
+        self.confirm_unshare = None;
+        let Some(sh) = self.shares.iter().find(|s| s.slug == slug).cloned() else { return };
+        self.unsharing.insert(slug.to_owned());
+        let (cfg, aws) = (self.cfg.share.clone(), self.cfg.aws.clone());
+        let (tx, waker) = (self.tx.clone(), self.waker.clone());
+        let slug = slug.to_owned();
+        std::thread::spawn(move || {
+            let result = crate::share::remove(&sh, &cfg, &aws);
+            let _ = tx.send(Event::Unshared { slug, result });
+            if let Some(w) = waker {
+                w();
+            }
+        });
+    }
+
+    pub fn open_shared(&mut self) {
+        if let Some(id) = self.tabs.iter().find(|t| t.spec.kind == TabKind::Shared).map(Tab::id) {
+            self.focus(id);
+            self.check_shares();
+        } else {
+            self.open(TabKind::Shared, Vec::new(), Some("Shared".into()), false, false, None, None);
+        }
+    }
+
     /// A framed 2x screenshot of the front tab, saved to ~/Pictures/adeck and copied.
     pub fn screenshot(&mut self) {
         let Some(t) = self.current() else { return };
@@ -1617,6 +1785,58 @@ impl App {
                     Err(e) => self.toast = Some((e, true)),
                 }
             }
+            Event::Shared { result } => {
+                self.sharing = false;
+                match result {
+                    Ok(sh) => {
+                        let url = sh.url.clone();
+                        self.shares.insert(0, sh);
+                        crate::share::save(&self.shares);
+                        let _ = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn().and_then(|mut c| {
+                            use std::io::Write;
+                            c.stdin.take().map_or(Ok(()), |mut i| i.write_all(url.as_bytes()))?;
+                            c.wait().map(|_| ())
+                        });
+                        self.toast = Some((format!("Shared · link copied · {url}"), false));
+                    }
+                    Err(e) => self.toast = Some((e, true)),
+                }
+            }
+            Event::Unshared { slug, result } => {
+                self.unsharing.remove(&slug);
+                match result {
+                    Ok(()) => {
+                        self.shares.retain(|s| s.slug != slug);
+                        crate::share::save(&self.shares);
+                        self.toast = Some(("Taken down, audio and all".into(), false));
+                    }
+                    Err(e) => self.toast = Some((e, true)),
+                }
+            }
+            Event::Live { result } => match result {
+                Ok(live) => {
+                    // Taken down elsewhere: mark it, and clear its S3 audio so nothing lingers.
+                    let mut cleaned = Vec::new();
+                    for sh in &mut self.shares {
+                        let gone = !live.contains(&sh.slug);
+                        if gone && !sh.gone {
+                            sh.gone = true;
+                            cleaned.push(sh.clone());
+                        }
+                    }
+                    crate::share::save(&self.shares);
+                    self.shares_checked = Some(Ok(()));
+                    let (cfg, aws) = (self.cfg.share.clone(), self.cfg.aws.clone());
+                    if !cleaned.is_empty() {
+                        std::thread::spawn(move || {
+                            for sh in cleaned {
+                                let _ = crate::share::clean_audio(&sh, &cfg, &aws);
+                            }
+                        });
+                    }
+                }
+                Err(e) => self.shares_checked = Some(Err(e)),
+            },
             Event::Shot { result } => {
                 self.shooting = false;
                 self.toast = Some(match result {
@@ -1933,6 +2153,30 @@ impl App {
                 let since = a.get("since").and_then(Value::as_f64).unwrap_or(0.0);
                 Ok(json!({ "rows": feedback::select(&rows, tab_arg(), &items, since) }))
             }
+            "_export" => {
+                if let Some(id) = tab_arg() {
+                    self.focus(id);
+                }
+                let x = self.export().ok_or("That tab can't be shared: a compare, single, render or board can.")?;
+                Ok(json!({"title": x.title, "page": x.page, "files": x.files}))
+            }
+            "_shared" => {
+                let sh: crate::share::Share = serde_json::from_value(a.clone()).map_err(|e| e.to_string())?;
+                self.shares.insert(0, sh);
+                crate::share::save(&self.shares);
+                Ok(json!({}))
+            }
+            "_unshared" => {
+                let slug = s("slug").ok_or("slug is required")?;
+                self.shares.retain(|x| x.slug != slug);
+                crate::share::save(&self.shares);
+                Ok(json!({}))
+            }
+            "list_shares" => Ok(json!({"shares": self.shares})),
+            "open_shared" => {
+                self.open_shared();
+                Ok(json!({"tab_id": self.active}))
+            }
             "_item_path" => {
                 let id = s("id").ok_or("id is required")?;
                 let path = match self.items.get(&id) {
@@ -2015,6 +2259,7 @@ impl App {
         match self.current() {
             None => "No tabs. Ask your LLM to open something, or drop files here.".into(),
             Some(t) if t.spec.kind == TabKind::Run => format!("{} items", t.rows.len()),
+            Some(t) if t.spec.kind == TabKind::Shared => "Shared pages · take one down to delete its page and audio".into(),
             Some(t) if t.spec.kind == TabKind::Diff => t.spec.diff.as_ref().map_or_else(String::new, |d| format!("{} vs {} · {} rows", d.a, d.b, d.rows.len())),
             Some(t) if t.spec.kind == TabKind::Board => {
                 let b = t.board().cloned().unwrap_or_default();

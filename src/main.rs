@@ -9,6 +9,7 @@ mod jobs;
 mod mcp;
 mod mixer;
 mod scenes;
+mod share;
 mod shot;
 mod source;
 mod ui;

@@ -4,6 +4,7 @@ pub mod board;
 pub mod compare;
 pub mod diff;
 pub mod pads;
+pub mod shared;
 pub mod sheet;
 pub mod icons;
 pub mod render;
@@ -43,6 +44,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 sheet::wrap(s, t, main, width, k)
             }
             TabKind::Diff => diff::build(s, t, width, k),
+            TabKind::Shared => shared::build(s, width, k),
         },
     };
     // Narrow windows scroll the whole page rather than squeezing the strips.
@@ -78,6 +80,7 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
                 TabKind::Run => &icons::TABLE,
                 TabKind::Board => &icons::BOARD,
                 TabKind::Diff => &icons::DIFF,
+                TabKind::Shared => &icons::SHARE,
             };
             TabItem::new(t.id().to_string(), tab_title(s, t)).icon(icon)
         })
@@ -164,6 +167,10 @@ fn new_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .item(rune_kit::MenuItem::new("New compare").icon(&icons::COMPARE).description("Then add or drop files into it").on_select(|s: &mut App| {
             s.new_menu = false;
             s.new_compare();
+        }))
+        .item(rune_kit::MenuItem::new("Shared pages").icon(&icons::SHARE).description("Every page you've shared; take them down").on_select(|s: &mut App| {
+            s.new_menu = false;
+            s.open_shared();
         }));
     if !s.menu_runs.is_empty() {
         m = m.separator().group_label("Runs");
@@ -252,6 +259,12 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.open_new_menu();
         return true;
     }
+    if ev.is_command('e') && ev.mods.shift {
+        if let Err(e) = s.share() {
+            s.toast = Some((e, true));
+        }
+        return true;
+    }
     if ev.is_command('s') && ev.mods.shift {
         s.screenshot();
         return true;
@@ -267,7 +280,7 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     let Some(kind) = s.current().map(|t| t.spec.kind) else { return false };
-    if matches!(kind, TabKind::Run | TabKind::Diff) {
+    if matches!(kind, TabKind::Run | TabKind::Diff | TabKind::Shared) {
         return false;
     }
     if kind == TabKind::Board && s.current().and_then(|t| t.board()).is_some_and(crate::board::Board::is_pads) && !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl {

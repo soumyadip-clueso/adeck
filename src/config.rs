@@ -20,6 +20,7 @@ pub struct Config {
     /// The aws CLI.
     pub aws: String,
     pub s3: S3,
+    pub share: ShareCfg,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -34,9 +35,45 @@ pub struct S3 {
     pub expired_hint: String,
 }
 
+/// Sharing a tab as a page (see `share.rs`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct ShareCfg {
+    /// The publisher program: `publish <dir> <slug> <title>`, `remove <slug>`, `list`.
+    pub command: String,
+    /// Starts every share's slug, so they're easy to spot wherever they're hosted.
+    pub prefix: String,
+    /// `bundle` (audio inside the page) or `s3`.
+    pub audio: String,
+    pub s3: ShareS3,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ShareS3 {
+    pub bucket: String,
+    pub prefix: String,
+    pub profile: String,
+    pub region: String,
+    /// The URL that serves the bucket's objects: `<public_url>/<key>`.
+    pub public_url: String,
+}
+
+impl Default for ShareCfg {
+    fn default() -> Self {
+        ShareCfg { command: String::new(), prefix: "adeck-".into(), audio: "bundle".into(), s3: ShareS3::default() }
+    }
+}
+
+impl ShareCfg {
+    pub fn command(&self) -> Option<PathBuf> {
+        (!self.command.is_empty()).then(|| expand(Path::new(&self.command)))
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
-        Config { port: 7717, run_roots: Vec::new(), refs_dir: None, earshot: "earshot".into(), aws: "aws".into(), s3: S3::default() }
+        Config { port: 7717, run_roots: Vec::new(), refs_dir: None, earshot: "earshot".into(), aws: "aws".into(), s3: S3::default(), share: ShareCfg::default() }
     }
 }
 

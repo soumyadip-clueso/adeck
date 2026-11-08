@@ -71,6 +71,28 @@ Or in a project's `.mcp.json`:
 
 Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
 
+## Screenshots and sharing
+
+- **Screenshot** (camera in the footer, ⌘⇧S, or `screenshot_tab pretty: true`): the tab at 2x, framed on a
+  gradient with rounded corners and a shadow, saved to `~/Pictures/adeck` and copied to the clipboard.
+- **Share** (share icon in the footer, ⌘⇧E, or `share_tab`): the tab becomes a web page with gapless A/B
+  players, waveforms, numbers and details. The link is copied. Reference-pack audio never leaves your
+  machine: those members show as local-only, under the name "Reference".
+- **Shared pages** (+ menu, or `open_shared` / `list_shares`): every page you've shared, with Open, Copy
+  link and Take down. Taking a page down deletes it and its audio (`unshare`). A page taken down
+  somewhere else shows as taken down, and its S3 audio is cleared.
+
+Sharing calls a publisher program you name in the config, so any host works:
+
+```toml
+[share]
+command = "~/.config/adeck/my-publisher"   # publish <dir> <slug> <title> → {"url": …}; remove <slug>; list → [{slug, url}]
+prefix = "adeck-"
+audio = "bundle"                           # audio inside the page, or "s3":
+# [share.s3]
+# bucket = "…"; prefix = "shares"; profile = "…"; region = "…"; public_url = "https://…"
+```
+
 ## Config
 
 `~/.config/adeck/config.toml`. Everything is optional; without it adeck opens any path it's given.
