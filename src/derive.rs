@@ -79,7 +79,7 @@ pub fn cache_for(path: &Path) -> PathBuf {
 
 /// The spectrogram's RGBA from the cache, if it matches the analysis.
 pub fn cached_spec(path: &Path, a: &Analysis) -> Option<Vec<u8>> {
-    let rgba = std::fs::read(cache_for(path).join("spec.rgba")).ok()?;
+    let rgba = std::fs::read(cache_for(path).join("spec-mono.rgba")).ok()?;
     (rgba.len() == (a.spec_w * a.spec_h * 4) as usize).then_some(rgba)
 }
 
@@ -118,7 +118,7 @@ pub fn analyse(path: &Path) -> Result<Analysis, String> {
     if let Ok(a) = std::fs::read(dir.join("analysis.json"))
         && let Ok(a) = serde_json::from_slice::<Analysis>(&a)
         && a.version == VERSION
-        && std::fs::metadata(dir.join("spec.rgba")).is_ok_and(|m| m.len() == u64::from(a.spec_w * a.spec_h * 4))
+        && std::fs::metadata(dir.join("spec-mono.rgba")).is_ok_and(|m| m.len() == u64::from(a.spec_w * a.spec_h * 4))
     {
         return Ok(a);
     }
@@ -128,7 +128,7 @@ pub fn analyse(path: &Path) -> Result<Analysis, String> {
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(j) = serde_json::to_vec(&a) {
         let _ = std::fs::write(dir.join("analysis.json"), j);
-        let _ = std::fs::write(dir.join("spec.rgba"), &spec);
+        let _ = std::fs::write(dir.join("spec-mono.rgba"), &spec);
     }
     Ok(a)
 }
@@ -264,7 +264,7 @@ impl Biquad {
     }
 }
 
-/// A log-frequency spectrogram, 30 Hz to Nyquist, in magma-like colours, 90 dB under the file's
+/// A log-frequency spectrogram, 30 Hz to Nyquist, in greys, 90 dB under the file's
 /// loudest bin. Returns width, height and RGBA (low frequencies at the bottom).
 pub fn spectrogram(mono: &[f32], rate: u32) -> (u32, u32, Vec<u8>) {
     let secs = mono.len() as f64 / f64::from(rate.max(1));
@@ -313,15 +313,15 @@ pub fn spectrogram(mono: &[f32], rate: u32) -> (u32, u32, Vec<u8>) {
     let mut rgba = Vec::with_capacity(cols * rows * 4);
     for v in db {
         let t = ((v - floor) / 90.0).clamp(0.0, 1.0);
-        let [r, g, b] = magma(t);
+        let [r, g, b] = greys(t);
         rgba.extend_from_slice(&[r, g, b, 255]);
     }
     (cols as u32, rows as u32, rgba)
 }
 
-/// An approximation of matplotlib's magma.
-fn magma(t: f32) -> [u8; 3] {
-    const STOPS: [[f32; 3]; 6] = [[0.0, 0.0, 4.0], [40.0, 11.0, 84.0], [101.0, 21.0, 110.0], [183.0, 55.0, 121.0], [251.0, 135.0, 97.0], [252.0, 253.0, 191.0]];
+/// Near-black through cool greys to white: quiet detail stays visible without a rainbow.
+fn greys(t: f32) -> [u8; 3] {
+    const STOPS: [[f32; 3]; 6] = [[22.0, 22.0, 25.0], [30.0, 31.0, 36.0], [58.0, 60.0, 68.0], [112.0, 114.0, 122.0], [186.0, 187.0, 192.0], [250.0, 250.0, 250.0]];
     let x = t * (STOPS.len() - 1) as f32;
     let i = (x.floor() as usize).min(STOPS.len() - 2);
     let f = x - i as f32;

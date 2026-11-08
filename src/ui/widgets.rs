@@ -12,12 +12,8 @@ pub fn screen() -> Color {
     oklch(0.17, 0.005, 260.0)
 }
 
-pub fn wave_ink() -> [u8; 3] {
-    [96, 168, 255]
-}
-
-/// The waveform from an envelope: min/max as the body, RMS brighter inside it, mirrored about the
-/// middle. Straight-alpha RGBA, `w`×`h`.
+/// The waveform from an envelope: peaks as a soft grey body, RMS as a bright core, edges
+/// anti-aliased. Straight-alpha RGBA, `w`×`h`.
 pub fn paint_wave(env: &[[f32; 3]], w: usize, h: usize) -> Vec<u8> {
     let mut px = vec![0u8; w * h * 4];
     if env.is_empty() || w == 0 || h == 0 {
@@ -25,10 +21,18 @@ pub fn paint_wave(env: &[[f32; 3]], w: usize, h: usize) -> Vec<u8> {
     }
     let peak = env.iter().fold(0f32, |m, c| m.max(c[0].abs()).max(c[1].abs())).max(1e-6);
     // Quiet files still fill most of the strip, as a DAW's normalised view does.
-    let gain = (0.95 / peak).min(64.0);
+    let gain = (0.86 / peak).min(64.0);
     let mid = h as f32 / 2.0;
-    let body = wave_ink();
-    let core = [200u8, 225, 255];
+    const BODY: ([u8; 3], f32) = ([140, 142, 150], 0.6);
+    const CORE: ([u8; 3], f32) = ([214, 215, 220], 0.95);
+    let mut put = |x: usize, y: usize, (rgb, a): ([u8; 3], f32), cov: f32| {
+        let o = (y * w + x) * 4;
+        let a = (a * cov.clamp(0.0, 1.0) * 255.0) as u8;
+        if a >= px[o + 3] {
+            px[o..o + 3].copy_from_slice(&rgb);
+            px[o + 3] = a;
+        }
+    };
     for x in 0..w {
         let a = x * env.len() / w;
         let b = ((x + 1) * env.len() / w).max(a + 1).min(env.len());
@@ -38,16 +42,16 @@ pub fn paint_wave(env: &[[f32; 3]], w: usize, h: usize) -> Vec<u8> {
             hi = hi.max(c[1]);
             rms = rms.max(c[2]);
         }
-        let top = (mid - hi * gain * mid).floor().max(0.0) as usize;
-        let bottom = ((mid - lo * gain * mid).ceil() as usize).min(h).max(top + 1);
-        let r = (rms * gain * mid).max(0.5);
-        let (rt, rb) = ((mid - r).floor().max(0.0) as usize, ((mid + r).ceil() as usize).min(h));
-        for y in top..bottom {
-            let ink = if (rt..rb).contains(&y) { core } else { body };
-            let o = (y * w + x) * 4;
-            px[o..o + 3].copy_from_slice(&ink);
-            px[o + 3] = 255;
-        }
+        // Each band covers [a, b] in pixel rows; a row's coverage gives its alpha.
+        let mut band = |a: f32, b: f32, ink: ([u8; 3], f32)| {
+            let (a, b) = (a.max(0.0), b.min(h as f32));
+            for y in (a.floor() as usize)..(b.ceil() as usize).min(h) {
+                put(x, y, ink, (b.min(y as f32 + 1.0) - a.max(y as f32)).max(0.0));
+            }
+        };
+        let r = (rms * gain * mid).max(0.6);
+        band(mid - hi * gain * mid - 0.5, mid - lo * gain * mid + 0.5, BODY);
+        band(mid - r, mid + r, CORE);
     }
     px
 }
@@ -87,7 +91,7 @@ pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
     let (lo, hi) = s.window(tab);
     let span = (hi - lo).max(1e-6);
     let x_of = |secs: f64| ((secs - lo) / span) as f32 * width;
-    strip = strip.child(picture(e, a, lo, hi, width, false));
+    strip = strip.child(picture(e, a, lo, hi, width, height, false));
     if !a.beats.is_empty() {
         let mut shape = rune::Shape::new();
         let mut bar = 0;
@@ -118,12 +122,12 @@ pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
 pub fn spec_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, k: &Kit) -> El {
     let height = height * tab.strip_h;
     let mut strip =
-        el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(oklch(0.12, 0.01, 290.0)).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
+        el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
     let Some((e, a)) = e.and_then(|e| e.analysis.as_ref().map(|a| (e, a))) else {
         return strip;
     };
     let (lo, hi) = s.window(tab);
-    strip = strip.child(picture(e, a, lo, hi, width, true));
+    strip = strip.child(picture(e, a, lo, hi, width, height, true));
     let nyq = a.rate as f32 / 2.0;
     let flo = 30f32.min(nyq / 4.0);
     for (hz, label) in [(100.0, "100"), (1000.0, "1k"), (10000.0, "10k")] {
@@ -141,20 +145,22 @@ pub fn spec_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
 
 /// A file's picture over [lo, hi]: the waveform redrawn for that stretch when zoomed in (so it
 /// stays sharp), else the whole picture stretched and shifted into place.
-fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32, spec: bool) -> El {
+fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32, height: f32, spec: bool) -> El {
     e.ensure_full();
     let span = (hi - lo).max(1e-6);
-    let whole = lo <= 1e-6 && hi >= a.secs - 1e-6;
-    if !spec && !whole && a.secs > 0.0 {
-        let w = (width.round() as u32).clamp(64, 3000);
-        let key = ((lo * 1000.0) as u64, (hi * 1000.0) as u64, w);
+    if !spec && a.secs > 0.0 {
+        // Drawn at the strip's pixel size (2x), so nothing is stretched into hairlines.
+        let w = ((width * 2.0).round() as u32).clamp(64, 6000);
+        let h = ((height * 2.0).round() as u32).clamp(32, 600);
+        let key = ((lo * 1000.0) as u64, (hi * 1000.0) as u64, w, h);
         if e.view_key.get() != key {
             let n = a.envelope.len();
             let ca = ((lo / a.secs) * n as f64).floor().max(0.0) as usize;
             let cb = (((hi / a.secs) * n as f64).ceil() as usize).min(n);
             if cb > ca {
                 // Past the file's end the strip stays dark, so draw only the part that exists.
-                e.view_px.set(w, 160, paint_wave(&a.envelope[ca..cb], w as usize, 160));
+                let own = ((((a.secs.min(hi) - lo) / span) * f64::from(w)).round() as usize).clamp(1, w as usize);
+                e.view_px.set(own as u32, h, paint_wave(&a.envelope[ca..cb], own, h as usize));
             }
             e.view_key.set(key);
         }
@@ -173,7 +179,7 @@ fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, (lo, hi)
     if let Some((a, b)) = tab.loop_secs {
         let (xa, xb) = (x_of(a).clamp(0.0, width), x_of(b).clamp(0.0, width));
         if xb > xa {
-            strip = strip.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(k.c.icon_accent.alpha(0.16)).border(1.0, k.c.icon_accent.alpha(0.6)).inert());
+            strip = strip.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(k.c.text_base.alpha(0.16)).border(1.0, k.c.text_base.alpha(0.6)).inert());
         }
     }
     let ph = playhead(s, tab);
@@ -255,7 +261,7 @@ pub fn ruler(s: &App, tab: &Tab, key: &str, k: &Kit) -> El {
     if let Some((a, b)) = tab.loop_secs {
         let (fa, fb) = (((a - lo) / span).clamp(0.0, 1.0) as f32, ((b - lo) / span).clamp(0.0, 1.0) as f32);
         if fb > fa {
-            r = r.child(at_frac(fa, el().w_frac(fb - fa).h(20.0).radius(3.0).fill(c.icon_accent.alpha(0.22)).border(1.0, c.icon_accent.alpha(0.7))));
+            r = r.child(at_frac(fa, el().w_frac(fb - fa).h(20.0).radius(3.0).fill(c.text_base.alpha(0.22)).border(1.0, c.text_base.alpha(0.7))));
         }
     }
     r.on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
@@ -370,7 +376,7 @@ pub fn transport(s: &App, tab: &Tab, k: &Kit) -> El {
         .key("play");
     let total = tab_secs(s, tab);
     let ph = playhead(s, tab);
-    let mut scrub = bar("scrubber", if total > 0.0 { (ph / total) as f32 } else { 0.0 }, None, c.icon_accent, k, move |s: &mut App, f, phase| s.scrub(f64::from(f) * total, phase));
+    let mut scrub = bar("scrubber", if total > 0.0 { (ph / total) as f32 } else { 0.0 }, None, c.text_base, k, move |s: &mut App, f, phase| s.scrub(f64::from(f) * total, phase));
     if let Some((a, b)) = tab.view.filter(|_| total > 0.0) {
         scrub = scrub.child(at_frac((a / total) as f32, el().offset(0.0, 4.0).w_frac(((b - a) / total) as f32).h(10.0).radius(3.0).border(1.0, c.text_muted.alpha(0.6))));
     }
@@ -510,7 +516,7 @@ pub fn kv_table(key: &str, rows: &[(String, String)], highlight: &dyn Fn(&str) -
                 .py(4.0)
                 .gap(12.0)
                 .fill(if hot {
-                    c.icon_accent.alpha(0.10)
+                    c.text_base.alpha(0.10)
                 } else if i % 2 == 1 {
                     c.layer_01
                 } else {
@@ -605,11 +611,11 @@ pub fn annotation(tab: &Tab, k: &Kit) -> Option<El> {
             .gap(10.0)
             .center_y()
             .radius(k.radius.md)
-            .fill(c.icon_accent.alpha(0.08))
-            .border(1.0, c.icon_accent.alpha(0.25))
+            .fill(c.text_base.alpha(0.08))
+            .border(1.0, c.text_base.alpha(0.25))
             .animate_layout()
             .transition(rune::Transition::opacity())
-            .child(rune::icon(&icons::SPARK, 14.0).color(c.icon_accent))
+            .child(rune::icon(&icons::SPARK, 14.0).color(c.text_base))
             .child(body)
             .child(fold)
             .child(close),

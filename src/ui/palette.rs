@@ -314,7 +314,7 @@ fn hit_row(h: &Hit, i: usize, on: bool, k: &Kit) -> El {
         .px(10.0)
         .center_y()
         .radius(8.0)
-        .fill(if on { c.icon_accent.alpha(0.16) } else { Color::TRANSPARENT })
+        .fill(if on { c.text_base.alpha(0.16) } else { Color::TRANSPARENT })
         .cursor(rune::Cursor::Pointer)
         .role("option")
         .label(h.title.clone())

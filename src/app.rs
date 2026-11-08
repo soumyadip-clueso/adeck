@@ -235,7 +235,7 @@ pub struct Entry {
     pub full: std::cell::Cell<bool>,
     /// The waveform redrawn for a zoomed view, and which view (start and end ms, width).
     pub view_px: Pixels,
-    pub view_key: std::cell::Cell<(u64, u64, u32)>,
+    pub view_key: std::cell::Cell<(u64, u64, u32, u32)>,
 }
 
 impl Entry {
@@ -259,7 +259,7 @@ impl Entry {
             self.wave.set(1, 1, vec![0; 4]);
             self.spec.set(1, 1, vec![0; 4]);
             self.view_px.set(1, 1, vec![0; 4]);
-            self.view_key.set((0, 0, 0));
+            self.view_key.set((0, 0, 0, 0));
         }
     }
 
@@ -279,7 +279,7 @@ impl Entry {
             thumb: Pixels::new(),
             full: std::cell::Cell::new(false),
             view_px: Pixels::new(),
-            view_key: std::cell::Cell::new((0, 0, 0)),
+            view_key: std::cell::Cell::new((0, 0, 0, 0)),
         };
         for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
             if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {

@@ -65,7 +65,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         let on = m == t.active;
         let label = t.member_label(m);
         let mut name_col = col().gap(2.0).min_w(0.0).shrink();
-        let mut first = row().gap(6.0).center_y().child(text(label.clone()).font(k.ty.ui_medium).color(if on { c.icon_accent } else { c.text_base }));
+        let mut first = row().gap(6.0).center_y().child(text(label.clone()).font(k.ty.ui_medium).color(if on { c.text_base } else { c.text_muted }));
         if !hidden {
             first = first.child(text(member_name(s, t, m)).font(k.ty.small_medium).color(c.text_base).truncate().shrink());
             if e.is_some_and(|e| e.item.is_ref) {
@@ -105,8 +105,8 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
             .gap(8.0)
             .center_y()
             .radius(k.radius.md)
-            .fill(if on { c.icon_accent.alpha(0.14) } else { c.layer_01 })
-            .border(1.0, if on { c.icon_accent.alpha(0.7) } else { Color::TRANSPARENT })
+            .fill(if on { c.text_base.alpha(0.14) } else { c.layer_01 })
+            .border(1.0, if on { c.text_base.alpha(0.7) } else { Color::TRANSPARENT })
             .cursor(rune::Cursor::Pointer)
             .role("button")
             .label(format!("Listen to {label}"))
@@ -162,7 +162,7 @@ fn diff_table(s: &App, t: &Tab, k: &Kit) -> El {
     let keys = crate::item::differing(&present);
     let mut head = row().w_full().px(8.0).py(4.0).gap(12.0).child(text("Differs").font(k.ty.small_medium).color(c.text_muted).w(180.0));
     for m in 0..t.spec.items.len() {
-        head = head.child(text(t.member_label(m)).font(k.ty.small_medium).color(if m == t.active { c.icon_accent } else { c.text_muted }).w(0.0).grow(1.0).min_w(0.0));
+        head = head.child(text(t.member_label(m)).font(k.ty.small_medium).color(if m == t.active { c.text_base } else { c.text_muted }).w(0.0).grow(1.0).min_w(0.0));
     }
     let mut list = col().key("diff-rows").w_full();
     for (i, key) in keys.iter().enumerate() {

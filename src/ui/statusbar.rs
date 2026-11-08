@@ -316,7 +316,7 @@ fn log(job: &Job, k: &Kit) -> El {
 /// A thin progress bar. Indeterminate while the job is still counting its work.
 fn bar(job: &Job, w: f32, k: &Kit) -> El {
     let c = &k.c;
-    let ink = if job.phase == Phase::Stopping { c.icon_faint } else { c.icon_accent };
+    let ink = if job.phase == Phase::Stopping { c.icon_faint } else { c.text_base };
     let fill = el().h_full().radius(2.0).fill(ink);
     let fill = match job.fraction() {
         Some(f) => fill.w_frac(f),

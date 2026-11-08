@@ -117,7 +117,7 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
         .gap(10.0)
         .radius(k.radius.lg)
         .fill(if on { c.layer_01 } else { Color::TRANSPARENT })
-        .border(1.0, if on { c.icon_accent.alpha(0.35) } else { c.border_weak })
+        .border(1.0, if on { c.text_base.alpha(0.35) } else { c.border_weak })
         .child(head);
 
     // The tiles, wrapped to the width.
@@ -199,8 +199,8 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
         .w(w)
         .px(8.0).py(8.0)
         .radius(k.radius.md)
-        .fill(if active { c.icon_accent.alpha(if playing { 0.20 } else { 0.12 }) } else { c.layer_01 })
-        .border(1.0, if active { c.icon_accent.alpha(0.75) } else { c.border_weak })
+        .fill(if active { c.text_base.alpha(if playing { 0.20 } else { 0.12 }) } else { c.layer_01 })
+        .border(1.0, if active { c.text_base.alpha(0.75) } else { c.border_weak })
         .cursor(rune::Cursor::Pointer)
         .role("button")
         .label(format!("Play {label}"))
@@ -551,7 +551,7 @@ fn more(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
                 .gap(10.0)
                 .center_y()
                 .radius(k.radius.sm)
-                .fill(if on { c.icon_accent.alpha(0.12) } else if i % 2 == 1 { c.layer_02 } else { Color::TRANSPARENT })
+                .fill(if on { c.text_base.alpha(0.12) } else if i % 2 == 1 { c.layer_02 } else { Color::TRANSPARENT })
                 .cursor(rune::Cursor::Pointer)
                 .role("button")
                 .label(format!("Play take {}", i + 1))

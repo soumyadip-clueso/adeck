@@ -42,7 +42,7 @@ pub fn build(s: &App, width: f32, k: &Kit, layer: &mut Vec<El>) {
     let mut grid = row().w_full().flex_wrap().gap(24.0).px(20.0).py(18.0).items_start();
     for (i, (title, rows)) in order.iter().enumerate() {
         let mut sec = col().w(col_w).gap(6.0).child(
-            row().gap(8.0).center_y().child(text(*title).font(k.ty.small_medium).color(c.text_faint)).child(if i == 0 && kind.is_some() { text("this tab").font(k.ty.small).color(c.icon_accent) } else { text(String::new()) }),
+            row().gap(8.0).center_y().child(text(*title).font(k.ty.small_medium).color(c.text_faint)).child(if i == 0 && kind.is_some() { text("this tab").font(k.ty.small).color(c.text_base) } else { text(String::new()) }),
         );
         for (key, what) in *rows {
             sec = sec.child(row().w_full().gap(10.0).center_y().child(text(*what).font(k.ty.ui).color(c.text_base).truncate().shrink().min_w(0.0)).child(spacer()).child(keys_of(key, k)));
