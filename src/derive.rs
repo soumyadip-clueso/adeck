@@ -77,16 +77,52 @@ pub fn cache_for(path: &Path) -> PathBuf {
     crate::config::cache_dir().join(format!("{:016x}", h.finish()))
 }
 
-/// The analysis and the spectrogram's RGBA, from the cache or worked out now.
-pub fn analyse(path: &Path) -> Result<(Analysis, Vec<u8>), String> {
+/// The spectrogram's RGBA from the cache, if it matches the analysis.
+pub fn cached_spec(path: &Path, a: &Analysis) -> Option<Vec<u8>> {
+    let rgba = std::fs::read(cache_for(path).join("spec.rgba")).ok()?;
+    (rgba.len() == (a.spec_w * a.spec_h * 4) as usize).then_some(rgba)
+}
+
+/// At most this many files decode for analysis at once, so opening a big board doesn't spawn
+/// hundreds of decoders that fight for memory and the CPU.
+const PARALLEL: usize = 3;
+
+fn gate() -> &'static (std::sync::Mutex<usize>, std::sync::Condvar) {
+    static G: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar)> = std::sync::OnceLock::new();
+    G.get_or_init(|| (std::sync::Mutex::new(0), std::sync::Condvar::new()))
+}
+
+struct Slot;
+impl Slot {
+    fn take() -> Slot {
+        let (m, cv) = gate();
+        let mut n = cv.wait_while(m.lock().unwrap_or_else(std::sync::PoisonError::into_inner), |n| *n >= PARALLEL).unwrap_or_else(std::sync::PoisonError::into_inner);
+        *n += 1;
+        Slot
+    }
+}
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let (m, cv) = gate();
+        if let Ok(mut n) = m.lock() {
+            *n -= 1;
+        }
+        cv.notify_one();
+    }
+}
+
+/// The analysis, from the cache or worked out now (the spectrogram is cached beside it and
+/// loaded only when a strip shows it).
+pub fn analyse(path: &Path) -> Result<Analysis, String> {
     let dir = cache_for(path);
-    if let (Ok(a), Ok(spec)) = (std::fs::read(dir.join("analysis.json")), std::fs::read(dir.join("spec.rgba")))
+    if let Ok(a) = std::fs::read(dir.join("analysis.json"))
         && let Ok(a) = serde_json::from_slice::<Analysis>(&a)
         && a.version == VERSION
-        && spec.len() == (a.spec_w * a.spec_h * 4) as usize
+        && std::fs::metadata(dir.join("spec.rgba")).is_ok_and(|m| m.len() == u64::from(a.spec_w * a.spec_h * 4))
     {
-        return Ok((a, spec));
+        return Ok(a);
     }
+    let _slot = Slot::take();
     let pcm = decode::decode(path)?;
     let (a, spec) = analyse_pcm(&pcm);
     let _ = std::fs::create_dir_all(&dir);
@@ -94,7 +130,7 @@ pub fn analyse(path: &Path) -> Result<(Analysis, Vec<u8>), String> {
         let _ = std::fs::write(dir.join("analysis.json"), j);
         let _ = std::fs::write(dir.join("spec.rgba"), &spec);
     }
-    Ok((a, spec))
+    Ok(a)
 }
 
 pub fn analyse_pcm(pcm: &Pcm) -> (Analysis, Vec<u8>) {

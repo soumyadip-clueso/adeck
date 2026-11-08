@@ -487,11 +487,13 @@ mod tests {
         rt.pointer_move(sx + sw * 0.7, y);
         rt.frame(1.0 / 60.0);
         let mid = rt.state.mixer.secs();
+        assert!(!rt.state.mixer.is_playing(), "scrubbing is silent");
         rt.pointer_up(sx + sw * 0.7, y);
         rt.frame(1.0 / 60.0);
         eprintln!("down {at_down} mid {mid} end {} x {x}", rt.state.mixer.secs());
         assert!((at_down - 2.0).abs() < 0.3, "press lands at 20%: {at_down}");
         assert!((mid - 7.0).abs() < 0.3, "drag follows: {mid}");
+        assert!(!rt.state.mixer.is_playing(), "it was stopped, so it stays stopped");
     }
 
     #[test]

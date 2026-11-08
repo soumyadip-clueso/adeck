@@ -164,7 +164,7 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     }
     let mut thumb = el().w_full().h(44.0).radius(k.radius.sm).fill(widgets::screen()).clip_rounded(k.radius.sm).inert();
     if let Some(e) = e {
-        let px = if t.zoom_sound && e.sound.is_some() { &e.zoom } else { &e.wave };
+        let px = if t.zoom_sound && e.sound.is_some() { &e.zoom } else { &e.thumb };
         if e.analysis.is_some() {
             thumb = thumb.child(el().absolute(0.0, 0.0).w_full().h_full().pixels(px));
         }

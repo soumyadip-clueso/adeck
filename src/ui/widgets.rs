@@ -142,6 +142,7 @@ pub fn spec_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
 /// A file's picture over [lo, hi]: the waveform redrawn for that stretch when zoomed in (so it
 /// stays sharp), else the whole picture stretched and shifted into place.
 fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32, spec: bool) -> El {
+    e.ensure_full();
     let span = (hi - lo).max(1e-6);
     let whole = lo <= 1e-6 && hi >= a.secs - 1e-6;
     if !spec && !whole && a.secs > 0.0 {

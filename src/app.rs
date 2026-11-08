@@ -227,12 +227,40 @@ pub struct Entry {
     /// Where the sound is, and its waveform drawn over just that stretch.
     pub sound: Option<(f64, f64)>,
     pub zoom: Pixels,
+    /// Small whole-file waveform for tiles and pads; `wave` and `spec` are drawn full size only
+    /// while a strip shows this file, and dropped when it leaves (see `App::trim_pixels`).
+    pub thumb: Pixels,
+    pub full: std::cell::Cell<bool>,
     /// The waveform redrawn for a zoomed view, and which view (start and end ms, width).
     pub view_px: Pixels,
     pub view_key: std::cell::Cell<(u64, u64, u32)>,
 }
 
 impl Entry {
+    /// Draws the full-size waveform and loads the spectrogram from the cache, once, the first
+    /// time a strip needs them. Safe from the view: pictures fill in place.
+    pub fn ensure_full(&self) {
+        if self.full.get() {
+            return;
+        }
+        let Some(a) = &self.analysis else { return };
+        self.wave.set(2000, 160, crate::ui::widgets::paint_wave(&a.envelope, 2000, 160));
+        if let Some(rgba) = derive::cached_spec(&self.item.path, a) {
+            self.spec.set(a.spec_w, a.spec_h, rgba);
+        }
+        self.full.set(true);
+    }
+
+    /// Lets the full-size pictures go.
+    pub fn drop_full(&self) {
+        if self.full.replace(false) {
+            self.wave.set(1, 1, vec![0; 4]);
+            self.spec.set(1, 1, vec![0; 4]);
+            self.view_px.set(1, 1, vec![0; 4]);
+            self.view_key.set((0, 0, 0));
+        }
+    }
+
     fn new(item: Item) -> Entry {
         let mut e = Entry {
             item,
@@ -246,6 +274,8 @@ impl Entry {
             sheet: None,
             sound: None,
             zoom: Pixels::new(),
+            thumb: Pixels::new(),
+            full: std::cell::Cell::new(false),
             view_px: Pixels::new(),
             view_key: std::cell::Cell::new((0, 0, 0)),
         };
@@ -261,7 +291,7 @@ impl Entry {
 /// What workers send back.
 pub enum Event {
     Resolved { tab: u64, id: String, result: Result<Item, String> },
-    Analysed { id: String, result: Result<(Analysis, Vec<u8>), String> },
+    Analysed { id: String, result: Result<Analysis, String> },
     Listed { tab: u64, result: Result<Vec<Item>, String> },
     Earshot { id: String, cmd: Earshot, result: Result<Value, String> },
     Sheet { id: String, result: Result<PathBuf, String> },
@@ -562,6 +592,16 @@ impl App {
         }
     }
 
+    /// Frees the full-size pictures of every file the front tab isn't showing in a strip.
+    pub fn trim_pixels(&self) {
+        let keep: HashSet<&String> = self.current().map(|t| t.spec.items.iter().collect()).unwrap_or_default();
+        for (id, e) in &self.items {
+            if !keep.contains(id) {
+                e.drop_full();
+            }
+        }
+    }
+
     pub fn focus(&mut self, id: u64) {
         if self.tab(id).is_none() {
             return;
@@ -572,6 +612,7 @@ impl App {
         self.active = Some(id);
         self.dirty = true;
         self.sync_mixer();
+        self.trim_pixels();
     }
 
     /// Moves a tab to `to` in the strip.
@@ -613,15 +654,15 @@ impl App {
             return;
         }
         let tab = t.id();
-        let ids = t.spec.items.clone();
+        let slots = slots(t);
         let (active, loop_secs) = (t.active, t.loop_secs);
-        let paths: Option<Vec<(String, PathBuf)>> = ids.iter().map(|i| self.items.get(i).map(|e| (i.clone(), e.item.path.clone()))).collect();
+        let paths: Option<Vec<(String, PathBuf)>> = slots.iter().map(|&m| t.spec.items.get(m).and_then(|i| self.items.get(i).map(|e| (i.clone(), e.item.path.clone())))).collect();
         let Some(paths) = paths else { return };
         if paths.is_empty() {
             return;
         }
         self.mixer.load(tab, paths);
-        self.mixer.set_active(active);
+        self.mixer.set_active(slots.iter().position(|&m| m == active).unwrap_or(0));
         self.mixer.set_loop_secs(loop_secs);
         self.apply_trims();
     }
@@ -630,7 +671,7 @@ impl App {
     pub fn apply_trims(&mut self) {
         let Some(t) = self.current() else { return };
         let on = t.spec.loudness_match && t.spec.items.len() > 1;
-        let trims: Vec<f32> = t.spec.items.iter().map(|i| if on { mixer::trim_for(self.lufs(i), MATCH_LUFS) } else { 1.0 }).collect();
+        let trims: Vec<f32> = slots(t).iter().filter_map(|&m| t.spec.items.get(m)).map(|i| if on { mixer::trim_for(self.lufs(i), MATCH_LUFS) } else { 1.0 }).collect();
         self.mixer.set_trims(trims);
     }
 
@@ -663,7 +704,8 @@ impl App {
             return;
         }
         t.active = member;
-        self.mixer.set_active(member);
+        // Same members: load is a no-op and this only moves the gain. A folded take swaps in.
+        self.sync_mixer();
     }
 
     pub fn seek_secs(&mut self, s: f64) {
@@ -921,6 +963,7 @@ impl App {
             t.view = None;
             if self.active == Some(tab) {
                 self.sync_mixer();
+                self.trim_pixels();
             }
         }
         self.want_measures();
@@ -1368,6 +1411,8 @@ impl App {
 
     /// A press or drag across a strip: it scrubs, playing from wherever the pointer is, and
     /// goes back to how it was when the drag ends.
+    /// Dragging moves the playhead silently: playback pauses on press and picks up from where you
+    /// let go, only if it was playing.
     pub fn scrub(&mut self, at: f64, phase: rune::Phase) {
         let playing = self.current().is_some_and(|t| self.mixer_is_for(t.id())) && self.mixer.is_playing();
         match phase {
@@ -1375,21 +1420,18 @@ impl App {
                 if let Some(t) = self.current_mut() {
                     t.scrub_resume = Some(playing);
                 }
+                if playing {
+                    self.mixer.pause();
+                }
                 self.seek_secs(at);
             }
             rune::Phase::Up => {
                 self.seek_secs(at);
-                let resume = self.current_mut().and_then(|t| t.scrub_resume.take()).unwrap_or(false);
-                if !resume {
-                    self.mixer.pause();
-                }
-            }
-            _ => {
-                self.seek_secs(at);
-                if !playing {
+                if self.current_mut().and_then(|t| t.scrub_resume.take()).unwrap_or(false) {
                     self.mixer.play();
                 }
             }
+            _ => self.seek_secs(at),
         }
     }
 
@@ -1496,16 +1538,15 @@ impl App {
                 };
                 entry.analysing = false;
                 match result {
-                    Ok((a, spec)) => {
-                        let (w, h) = (2000usize, 160usize);
-                        entry.wave.set(w as u32, h as u32, crate::ui::widgets::paint_wave(&a.envelope, w, h));
-                        entry.spec.set(a.spec_w, a.spec_h, spec);
+                    Ok(a) => {
+                        entry.thumb.set(360, 48, crate::ui::widgets::paint_wave(&a.envelope, 360, 48));
+                        entry.full.set(false);
                         let (lo, hi) = board::sound_range(&a.envelope, a.secs, -45.0);
                         entry.sound = Some((lo, hi));
                         let n = a.envelope.len();
                         let (ca, cb) = ((lo / a.secs * n as f64) as usize, ((hi / a.secs * n as f64).ceil() as usize).min(n));
                         if cb > ca {
-                            entry.zoom.set(600, 96, crate::ui::widgets::paint_wave(&a.envelope[ca..cb], 600, 96));
+                            entry.zoom.set(360, 48, crate::ui::widgets::paint_wave(&a.envelope[ca..cb], 360, 48));
                         }
                         entry.analysis = Some(a);
                         if self.current().is_some_and(|t| t.spec.items.contains(&id)) {
@@ -1988,7 +2029,7 @@ pub fn read_tool(cfg: &Config, scores: &HashMap<String, i64>, tool: &str, a: &Va
         "get_item" => {
             let id = s("id").ok_or("id is required")?;
             let item = source::resolve(cfg, &id)?;
-            let analysis = derive::analyse(&item.path).ok().map(|(a, _)| a);
+            let analysis = derive::analyse(&item.path).ok();
             let earshot: serde_json::Map<String, Value> = [Earshot::Describe, Earshot::Measure, Earshot::Critique]
                 .into_iter()
                 .filter_map(|c| derive::earshot_cached(&item.path, c).map(|v| (c.name().to_owned(), summarise_earshot(c, &v))))
@@ -2000,6 +2041,21 @@ pub fn read_tool(cfg: &Config, scores: &HashMap<String, i64>, tool: &str, a: &Va
             Ok(v)
         }
         other => Err(format!("No tool {other}.")),
+    }
+}
+
+/// The members a tab decodes for playback, by index into its items: all of them, except that a
+/// board decodes its folded rest only one at a time, as each is played.
+fn slots(t: &Tab) -> Vec<usize> {
+    match t.focused() {
+        Some(g) => {
+            let mut v: Vec<usize> = (0..g.members.len().min(t.spec.items.len())).collect();
+            if t.active >= g.members.len() && t.active < t.spec.items.len() {
+                v.push(t.active);
+            }
+            v
+        }
+        None => (0..t.spec.items.len()).collect(),
     }
 }
 
