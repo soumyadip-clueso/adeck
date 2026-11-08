@@ -7,6 +7,7 @@
 //! runs earshot.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
@@ -33,7 +34,31 @@ local-only reference pack) or s3:// URLs; list_runs and list_items find them. Pi
 annotate_tab. The user scores (0-3), picks and writes notes in the window; read them with get_feedback, or block \
 until they've judged with wait_for_feedback. screenshot_tab shows you what they see.";
 
-pub fn serve(cfg: Config, feedback_path: PathBuf, signal: Signal, waker: rune::Waker) -> Result<Receiver<Call>, String> {
+/// What the agent is up to, for the Dock icon: when it last called a tool, and how many calls are
+/// blocked waiting on the user's verdict.
+#[derive(Default)]
+pub struct Activity {
+    last_ms: std::sync::atomic::AtomicU64,
+    waiting: std::sync::atomic::AtomicUsize,
+}
+
+impl Activity {
+    fn touch(&self) {
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        self.last_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Seconds since the last tool call.
+    pub fn idle_secs(&self) -> f64 {
+        let last = self.last_ms.load(std::sync::atomic::Ordering::Relaxed);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        if last == 0 { f64::INFINITY } else { now.saturating_sub(last) as f64 / 1000.0 }
+    }
+    pub fn waiting(&self) -> bool {
+        self.waiting.load(std::sync::atomic::Ordering::Relaxed) > 0
+    }
+}
+
+pub fn serve(cfg: Config, feedback_path: PathBuf, signal: Signal, activity: Arc<Activity>, waker: rune::Waker) -> Result<Receiver<Call>, String> {
     let addr = format!("127.0.0.1:{}", cfg.port);
     let server = tiny_http::Server::http(&addr).map_err(|e| e.to_string())?;
     let (tx, rx) = channel::<Call>();
@@ -41,7 +66,7 @@ pub fn serve(cfg: Config, feedback_path: PathBuf, signal: Signal, waker: rune::W
         .name("adeck-mcp".into())
         .spawn(move || {
             for req in server.incoming_requests() {
-                let ctx = Ctx { cfg: cfg.clone(), tx: tx.clone(), waker: waker.clone(), feedback_path: feedback_path.clone(), signal: signal.clone() };
+                let ctx = Ctx { cfg: cfg.clone(), tx: tx.clone(), waker: waker.clone(), feedback_path: feedback_path.clone(), signal: signal.clone(), activity: activity.clone() };
                 std::thread::spawn(move || handle(req, &ctx));
             }
         })
@@ -56,6 +81,7 @@ struct Ctx {
     waker: rune::Waker,
     feedback_path: PathBuf,
     signal: Signal,
+    activity: Arc<Activity>,
 }
 
 impl Ctx {
@@ -167,8 +193,17 @@ fn lean(v: Value) -> Value {
 }
 
 fn call_tool(name: &str, args: &Value, ctx: &Ctx) -> Value {
+    ctx.activity.touch();
+    (ctx.waker)();
     match name {
-        "wait_for_feedback" => text_result(wait_for_feedback(args, ctx)),
+        "wait_for_feedback" => {
+            ctx.activity.waiting.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let r = wait_for_feedback(args, ctx);
+            ctx.activity.waiting.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            ctx.activity.touch();
+            (ctx.waker)();
+            text_result(r)
+        }
         "screenshot_tab" => match screenshot(args, ctx) {
             Ok(png) => {
                 json!({"content": [{"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(png), "mimeType": "image/png"}]})

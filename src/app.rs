@@ -322,6 +322,8 @@ pub struct App {
     tx: Sender<Event>,
     rx: Receiver<Event>,
     pub calls: Option<Receiver<mcp::Call>>,
+    pub activity: std::sync::Arc<mcp::Activity>,
+    pub dock: crate::dock::Dock,
     pub tab_drag: TabDragState,
     pub activity_open: bool,
     /// The job whose log is open in the Activity panel.
@@ -384,6 +386,8 @@ impl App {
             tx,
             rx,
             calls: None,
+            activity: std::sync::Arc::default(),
+            dock: crate::dock::Dock::default(),
             tab_drag: TabDragState::default(),
             activity_open: false,
             log_open: None,
@@ -415,7 +419,7 @@ impl App {
         self.jobs.set_waker(w.clone());
         self.mixer.set_waker(w.clone());
         if !self.headless {
-            match mcp::serve(self.cfg.clone(), self.feedback.path.clone(), self.feedback.signal.clone(), w) {
+            match mcp::serve(self.cfg.clone(), self.feedback.path.clone(), self.feedback.signal.clone(), self.activity.clone(), w) {
                 Ok(rx) => self.calls = Some(rx),
                 Err(e) => {
                     self.mcp_status = "MCP off".into();
@@ -1720,11 +1724,31 @@ impl App {
             tx.wake_after(std::time::Duration::from_millis(33));
             changed = true;
         }
+        if self.calls.is_some()
+            && let Some(wait) = self.dock.show(self.mood())
+        {
+            tx.wake_after(wait);
+        }
         if self.dirty {
             self.dirty = false;
             self.save();
         }
         changed
+    }
+
+    /// What the Dock icon shows: sound playing, the agent waiting on a verdict, the agent at work
+    /// (a tool call in the last few seconds, or analysis running), or nothing.
+    fn mood(&self) -> crate::dock::Mood {
+        use crate::dock::Mood;
+        if self.mixer.is_playing() {
+            Mood::Playing
+        } else if self.activity.waiting() {
+            Mood::Waiting
+        } else if self.activity.idle_secs() < 4.0 || self.jobs.list().iter().any(crate::jobs::Job::is_active) {
+            Mood::Working
+        } else {
+            Mood::Idle
+        }
     }
 
     fn drain(&mut self) -> bool {

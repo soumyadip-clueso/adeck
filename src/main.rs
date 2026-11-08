@@ -3,6 +3,7 @@ mod board;
 mod config;
 mod decode;
 mod derive;
+mod dock;
 mod feedback;
 mod item;
 mod jobs;
@@ -19,6 +20,14 @@ use rune::{AppSpec, Chrome};
 use app::App;
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(r) = dock::dump(&args) {
+        if let Err(e) = r {
+            eprintln!("adeck: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     rune::prewarm_gpu();
     let spec = AppSpec {
         fonts: rune_theme_opencode::FONTS,

@@ -8,9 +8,10 @@ rune_root=$(cargo metadata --format-version 1 | python3 -c 'import json,sys,os; 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/icon.iconset"
+# The icon is drawn by adeck itself (the dot-screen mark), at each size.
 for s in 16 32 64 128 256 512; do
-  sips -z $s $s assets/icon.png --out "$tmp/icon.iconset/icon_${s}x${s}.png" >/dev/null
-  sips -z $((s * 2)) $((s * 2)) assets/icon.png --out "$tmp/icon.iconset/icon_${s}x${s}@2x.png" >/dev/null
+  target/release/adeck --dock-icon "$tmp/icon.iconset/icon_${s}x${s}.png" $s
+  target/release/adeck --dock-icon "$tmp/icon.iconset/icon_${s}x${s}@2x.png" $((s * 2))
 done
 iconutil -c icns "$tmp/icon.iconset" -o "$tmp/adeck.icns"
 exec "$rune_root/scripts/mac-app" --name adeck --id io.github.soumyadip-clueso.adeck --exe adeck --bin target/release/adeck --icon "$tmp/adeck.icns"
