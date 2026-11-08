@@ -17,9 +17,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
-#fx { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; opacity: .3; transition: opacity .6s; }
-#fx.off { opacity: 0; }
-.wrap { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 32px 16px 80px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 80px; }
 header h1 { font-size: 26px; letter-spacing: -0.01em; margin: 0 0 4px; }
 header .sub { color: var(--muted); font-size: 13px; }
 .note { margin: 18px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--layer); color: var(--text); }
@@ -34,7 +32,7 @@ header .sub { color: var(--muted); font-size: 13px; }
 .clock { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 96px; }
 .keys { color: var(--faint); font-size: 12px; }
 input[type=range] { accent-color: var(--accent); width: 110px; }
-.group { margin-top: 26px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--layer) 86%, transparent); padding: 16px; transition: border-color .2s, box-shadow .2s; }
+.group { margin-top: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--layer); padding: 16px; transition: border-color .2s, box-shadow .2s; }
 .group.focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
 .ghead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .ghead h2 { margin: 0; font-size: 17px; }
@@ -77,7 +75,6 @@ footer { margin-top: 40px; color: var(--faint); font-size: 12px; text-align: cen
 </style>
 </head>
 <body>
-<canvas id="fx" aria-hidden="true"></canvas>
 <div class="wrap">
   <header>
     <h1 id="title"></h1>
@@ -89,7 +86,6 @@ footer { margin-top: 40px; color: var(--faint); font-size: 12px; text-align: cen
     <span class="clock" id="clock">0:00.0</span>
     <span class="keys">Space play · 1–9 switch · ↑↓ group</span>
     <span class="sp"></span>
-    <button class="btn" id="ripples" title="Ripples behind the page, driven by what's playing">Ripples</button>
     <button class="btn on" id="match" title="Play every sound at the same loudness">Match loudness</button>
     <label class="keys" style="display:flex;gap:6px;align-items:center">Volume <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9"></label>
   </div>
@@ -97,7 +93,6 @@ footer { margin-top: 40px; color: var(--faint); font-size: 12px; text-align: cen
   <footer>Shared from adeck. Reference-pack sounds stay on the sharer's machine.</footer>
 </div>
 <script id="data" type="application/json">/*__DATA__*/null</script>
-<script>/*__RIPPLES__*/</script>
 <script>
 (() => {
 const D = JSON.parse(document.getElementById('data').textContent);
@@ -112,30 +107,7 @@ $('#sub').textContent = `${n} sound${n === 1 ? '' : 's'}${D.groups.length > 1 ? 
 if (D.note) { const el = $('#note'); el.hidden = false; el.innerHTML = D.note.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); }
 
 let ctx = null, master = null, matchOn = true;
-let analyser = null, wave = null;
-const audio = () => { if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); master = ctx.createGain(); master.gain.value = +$('#vol').value; master.connect(ctx.destination); analyser = ctx.createAnalyser(); analyser.fftSize = 1024; wave = new Float32Array(analyser.fftSize); master.connect(analyser); } return ctx; };
-
-// Ripples: the page is a ripple tank; what plays drops rings from where it sits on screen.
-const fxCanvas = $('#fx');
-let fx = null;
-const store = { get: k => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} } };
-const fxColors = () => { const light = matchMedia('(prefers-color-scheme: light)').matches; fx && fx.colors(light ? [0.42, 0.48, 0.58] : [1, 1, 1], light ? [0.965, 0.969, 0.976] : [0.055, 0.059, 0.067]); };
-function setRipples(on) {
-  $('#ripples').classList.toggle('on', on); fxCanvas.classList.toggle('off', !on); store.set('adeck-ripples', on ? '1' : '0');
-  if (on && !fx && window.Ripples) { fx = Ripples(fxCanvas, { ambient: true, gain: 6 }); if (fx) { fxColors(); fx.drop(0.12, 0.3, 1.4, 2.6); fx.drop(0.9, 0.72, 1.2, 2.4); fx.drop(0.82, 0.18, 0.9, 2.2); fx.advance(200); } }
-  if (fx) fx.pause(!on);
-}
-matchMedia('(prefers-color-scheme: light)').addEventListener('change', fxColors);
-function fxDrive() {
-  if (!fx || !analyser || fxCanvas.classList.contains('off')) return;
-  fx.set('ambient', !P.playing);
-  if (!P.playing) return;
-  analyser.getFloatTimeDomainData(wave);
-  let sum = 0; for (let i = 0; i < wave.length; i++) sum += wave[i] * wave[i];
-  const el = document.querySelector('.row.on .who, .pad.on');
-  const r = el ? el.getBoundingClientRect() : { left: innerWidth / 2, top: innerHeight / 2, width: 0, height: 0 };
-  fx.drive(Math.min(1, Math.sqrt(sum / wave.length) * 3), (r.left + r.width / 2) / innerWidth, (r.top + r.height / 2) / innerHeight);
-}
+const audio = () => { if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); master = ctx.createGain(); master.gain.value = +$('#vol').value; master.connect(ctx.destination); } return ctx; };
 const buffers = new Map();
 const load = src => { if (!buffers.has(src)) buffers.set(src, fetch(src).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then(b => audio().decodeAudioData(b))); return buffers.get(src); };
 const trim = m => matchOn && m.lufs != null ? Math.min(4, Math.pow(10, (TARGET - m.lufs) / 20)) : 1;
@@ -248,15 +220,12 @@ function draw() {
   document.querySelectorAll('.pad').forEach(p => { const on = P.playing && P.g === +p.dataset.g && P.active === +p.dataset.m; const m = D.groups[+p.dataset.g].members[+p.dataset.m]; $('.fill', p).style.width = on ? `${Math.min(100, now() / (m.secs || 1) * 100)}%` : '0'; });
 }
 (function tick() {
-  fxDrive();
   if (P.playing) { const end = P.once ? (D.groups[P.g].members[P.active].secs || 0) : len(D.groups[P.g]); if (now() >= end) { P.playing = false; P.at = P.once ? 0 : end; stopNodes(); } draw(); }
   requestAnimationFrame(tick);
 })();
 window.addEventListener('resize', draw);
 $('#play').addEventListener('click', toggle);
 $('#match').addEventListener('click', e => { matchOn = !matchOn; e.currentTarget.classList.toggle('on', matchOn); if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(x.i === P.active ? trim(D.groups[P.g].members[x.i]) : 0, ctx.currentTime, 0.004)); });
-$('#ripples').addEventListener('click', () => setRipples(!$('#ripples').classList.contains('on')));
-setRipples(store.get('adeck-ripples') !== '0' && !matchMedia('(prefers-reduced-motion: reduce)').matches);
 $('#vol').addEventListener('input', e => { if (master) master.gain.value = +e.target.value; });
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || /input|textarea/i.test(e.target.tagName)) return;
