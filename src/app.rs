@@ -964,41 +964,7 @@ impl App {
         let ids = |k: &str| -> Vec<String> { a.get(k).and_then(Value::as_array).map(|xs| xs.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default() };
         let tab_arg = || a.get("tab_id").and_then(Value::as_u64);
         match tool {
-            "list_runs" => {
-                let mut runs = source::list_runs(&self.cfg);
-                if a.get("include_s3").and_then(Value::as_bool).unwrap_or(false) {
-                    runs.extend(source::list_s3_runs(&self.cfg)?);
-                }
-                Ok(json!({ "runs": runs }))
-            }
-            "list_items" => {
-                let run = s("run").ok_or("run is required")?;
-                let filter = s("filter").map(|f| f.to_ascii_lowercase());
-                let items = source::list_items(&self.cfg, &run)?;
-                let rows: Vec<Value> = items
-                    .iter()
-                    .filter(|i| filter.as_ref().is_none_or(|f| i.name.to_ascii_lowercase().contains(f) || i.meta.iter().any(|(_, v)| v.to_ascii_lowercase().contains(f))))
-                    .map(|i| json!({ "id": i.id, "name": i.name, "summary": i.subtitle(), "score": self.scores.get(&i.id) }))
-                    .collect();
-                Ok(json!({ "run": run, "count": rows.len(), "items": rows }))
-            }
-            "get_item" => {
-                let id = s("id").ok_or("id is required")?;
-                let item = match self.items.get(&id) {
-                    Some(e) => e.item.clone(),
-                    None => source::resolve(&self.cfg, &id)?,
-                };
-                let analysis = self.items.get(&id).and_then(|e| e.analysis.clone()).or_else(|| derive::analyse(&item.path).ok().map(|(a, _)| a));
-                let earshot: serde_json::Map<String, Value> = [Earshot::Describe, Earshot::Measure, Earshot::Critique]
-                    .into_iter()
-                    .filter_map(|c| derive::earshot_cached(&item.path, c).map(|v| (c.name().to_owned(), summarise_earshot(c, &v))))
-                    .collect();
-                let mut v = item.to_json();
-                v["analysis"] = analysis.map_or(Value::Null, |a| a.to_json());
-                v["earshot"] = Value::Object(earshot);
-                v["score"] = self.scores.get(&id).map_or(Value::Null, |s| Value::from(*s));
-                Ok(v)
-            }
+            "list_runs" | "list_items" | "get_item" => read_tool(&self.cfg, &self.scores, tool, a),
             "open_single" => {
                 let item = s("item").ok_or("item is required")?;
                 let id = self.open(TabKind::Single, vec![item], s("label"), false, true, None, None);
@@ -1180,6 +1146,47 @@ impl App {
                 if ready < t.spec.items.len() { format!("Analysing {}/{}…", ready, t.spec.items.len()) } else { format!("{} file{}", ready, if ready == 1 { "" } else { "s" }) }
             }
         }
+    }
+}
+
+/// The read-only tools: they touch the disk, the bucket and the cache but nothing on screen, so
+/// the MCP thread runs them and a slow S3 listing never stalls the window.
+pub fn read_tool(cfg: &Config, scores: &HashMap<String, i64>, tool: &str, a: &Value) -> Result<Value, String> {
+    let s = |k: &str| a.get(k).and_then(Value::as_str).map(str::to_owned);
+    match tool {
+        "list_runs" => {
+            let mut runs = source::list_runs(cfg);
+            if a.get("include_s3").and_then(Value::as_bool).unwrap_or(false) {
+                runs.extend(source::list_s3_runs(cfg)?);
+            }
+            Ok(json!({ "runs": runs }))
+        }
+        "list_items" => {
+            let run = s("run").ok_or("run is required")?;
+            let filter = s("filter").map(|f| f.to_ascii_lowercase());
+            let items = source::list_items(cfg, &run)?;
+            let rows: Vec<Value> = items
+                .iter()
+                .filter(|i| filter.as_ref().is_none_or(|f| i.name.to_ascii_lowercase().contains(f) || i.meta.iter().any(|(_, v)| v.to_ascii_lowercase().contains(f))))
+                .map(|i| json!({ "id": i.id, "name": i.name, "summary": i.subtitle(), "score": scores.get(&i.id) }))
+                .collect();
+            Ok(json!({ "run": run, "count": rows.len(), "items": rows }))
+        }
+        "get_item" => {
+            let id = s("id").ok_or("id is required")?;
+            let item = source::resolve(cfg, &id)?;
+            let analysis = derive::analyse(&item.path).ok().map(|(a, _)| a);
+            let earshot: serde_json::Map<String, Value> = [Earshot::Describe, Earshot::Measure, Earshot::Critique]
+                .into_iter()
+                .filter_map(|c| derive::earshot_cached(&item.path, c).map(|v| (c.name().to_owned(), summarise_earshot(c, &v))))
+                .collect();
+            let mut v = item.to_json();
+            v["analysis"] = analysis.map_or(Value::Null, |a| a.to_json());
+            v["earshot"] = Value::Object(earshot);
+            v["score"] = scores.get(&id).map_or(Value::Null, |s| Value::from(*s));
+            Ok(v)
+        }
+        other => Err(format!("No tool {other}.")),
     }
 }
 

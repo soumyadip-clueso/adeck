@@ -93,7 +93,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
 fn critique(v: &Value, k: &Kit) -> El {
     let c = &k.c;
     let verdict = v.get("verdict").and_then(Value::as_str).unwrap_or("–").to_owned();
-    let score = v.get("score").and_then(Value::as_f64).map_or("–".into(), |s| format!("{s:.0}"));
+    let score = v.get("score").and_then(Value::as_f64).map_or("–".into(), |s| format!("{s:.2}"));
     let mut out = col().gap(8.0).child(widgets::section_title("Scorecard", k)).child(
         row()
             .gap(18.0)
@@ -111,7 +111,7 @@ fn critique(v: &Value, k: &Kit) -> El {
             let range = match m.get("range").and_then(Value::as_array).map(|r| (r.first().cloned().unwrap_or(Value::Null), r.get(1).cloned().unwrap_or(Value::Null))) {
                 Some((Value::Null, b)) if !b.is_null() => format!("≤ {} {unit}", fmt(&b)),
                 Some((a, Value::Null)) if !a.is_null() => format!("≥ {} {unit}", fmt(&a)),
-                Some((a, b)) => format!("{}–{} {unit}", fmt(&a), fmt(&b)),
+                Some((a, b)) => format!("{} to {} {unit}", fmt(&a), fmt(&b)),
                 None => String::new(),
             };
             let name = m.get("label").and_then(Value::as_str).map_or(name, str::to_owned);
@@ -188,7 +188,23 @@ fn cuts_of(v: &Value) -> Option<Vec<(f64, Cut)>> {
     let silent = times("visual_without_any_sound");
     let no_hit = times("visual_without_hit");
     let near = |list: &[f64], t: f64| list.iter().any(|x| (x - t).abs() < 0.01);
-    Some(times("visual").into_iter().map(|t| (t, if near(&silent, t) { Cut::Silent } else if near(&no_hit, t) { Cut::Sound } else { Cut::Hit })).collect())
+    Some(
+        times("visual")
+            .into_iter()
+            .map(|t| {
+                (
+                    t,
+                    if near(&silent, t) {
+                        Cut::Silent
+                    } else if near(&no_hit, t) {
+                        Cut::Sound
+                    } else {
+                        Cut::Hit
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

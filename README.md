@@ -1,37 +1,102 @@
-# Sleeve
+# adeck
 
-A fast, good-looking app for your rekordbox library. Browse your tracks, analyse them, set hot cues and put playlists on a USB stick.
+A listening bench for generated audio, driven by your coding agent. The agent opens tabs on your Mac over MCP: one file, an A/B/N compare, a render, or a whole run. You listen, score, pick and write notes. The agent reads your verdicts back and keeps going.
 
-![Sleeve](screenshot.png)
+![A compare tab](docs/compare.png)
+
+Forked from [Sleeve](https://github.com/alii/sleeve), a rekordbox app by Alistair Smith. The rekordbox and USB parts are gone. Sleeve's look, its job system and its Rune UI stay.
+
+## What a tab shows
+
+- **One file**: the waveform with its beat grid, a spectrogram, every metadata field found for it, loudness, peak, tempo and key, and earshot's description and measurements. Keys 0 to 3 score it.
+- **A compare (2 to 9 files)**: every waveform on one time axis with one playhead. They all play at once and you hear one; keys 1 to 9 switch at exactly the same moment, with no gap. Loudness matching (on by default) brings each file to the same LUFS, so the louder one doesn't win by being louder. Blind mode hides the names as X, Y, Z until you pick. A table shows only the metadata that differs. Enter picks the one you're hearing.
+- **A render**: the video, earshot's scorecard and fixes, and every picture cut marked by whether it got a hit, some sound, or silence. Several renders switch like a compare.
+- **A run**: every item as a sortable table. Filter by any text, show what you haven't scored, open one or compare a selection.
+
+Click a waveform to seek, drag across it to loop, Space plays, ← and → step a second (with ⇧, five), Esc clears the loop, ⌘W closes the tab. Tabs come back when you reopen adeck.
+
+## Verdicts
+
+Every score, pick and note is one JSON line in `~/.config/adeck/feedback.jsonl`. When all the items sit in one local run, the line also goes into that run's own `feedback.jsonl`. A blind pick records which label was which. The agent reads them with `get_feedback`, or waits for the next one with `wait_for_feedback`.
 
 ## Get it
 
-Sleeve runs on a Mac. There's no download yet, so you build it yourself. It takes about five minutes.
+macOS only (the audio and video run on AVFoundation and CoreAudio). You need Rust; the right toolchain installs itself from `rust-toolchain.toml`.
 
-1. Open Terminal.
-2. Install Rust, then open a new Terminal window:
-   ```sh
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-3. Get Sleeve and open it:
-   ```sh
-   git clone https://github.com/alii/sleeve
-   cd sleeve
-   cargo run --release
-   ```
+```sh
+git clone https://github.com/soumyadip-clueso/adeck
+cd adeck
+cargo run --release
+```
 
-The first time takes a few minutes. If your Mac asks to install developer tools, say yes, then run step 3 again.
+The first build takes a few minutes.
 
-To open it again later, run `cd sleeve && cargo run --release`.
+## Connect your agent
 
-## Good to know
+adeck serves MCP on `http://127.0.0.1:7717/mcp` while it's open.
 
-- To add songs, drag them or their folders from Finder onto Sleeve. Drop them on a playlist to add them there too. Sleeve analyses them straight away.
-- To put a playlist on a USB stick, right-click it.
-- Sleeve backs up your library before it changes anything.
-- Close rekordbox first. Sleeve won't change your library while rekordbox is open.
-- Songs stored in iCloud download when you play them.
+```sh
+claude mcp add --transport http adeck http://127.0.0.1:7717/mcp
+```
+
+Or in a project's `.mcp.json`:
+
+```json
+{ "mcpServers": { "adeck": { "type": "http", "url": "http://127.0.0.1:7717/mcp" } } }
+```
+
+| Tool | What it does |
+|---|---|
+| `list_runs`, `list_items`, `get_item` | Find runs and items; everything known about one item |
+| `open_single`, `open_compare`, `open_render`, `open_run` | Open a tab; each returns its `tab_id` |
+| `list_tabs`, `focus_tab`, `close_tab`, `annotate_tab` | Manage tabs; pin markdown on what to listen for |
+| `play`, `stop`, `set_loop` | Playback |
+| `screenshot_tab` | A PNG of a tab as you see it |
+| `get_feedback`, `wait_for_feedback` | Your verdicts |
+| `analyze` | Run earshot `describe`, `measure`, `critique` or `timeline` (cached) |
+
+Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
+
+## Config
+
+`~/.config/adeck/config.toml`. Everything is optional; without it adeck opens any path it's given.
+
+```toml
+port = 7717
+# Folders whose sub-folders of audio are runs, named by their path under the root.
+run_roots = ["~/work/generations"]
+# A reference pack that stays on this machine: shown with a REF badge, never sent anywhere.
+refs_dir = "~/work/refs"
+earshot = "earshot"   # the earshot CLI, for describe/measure/critique/sheet
+aws = "aws"
+
+# Runs in S3, read through the aws CLI with your own profile.
+[s3]
+profile = "my-profile"
+bucket = "my-bucket"
+prefix = "audio/runs"
+region = "us-west-2"
+expired_hint = "run `aws sso login --profile my-profile`"
+```
+
+Metadata is found, not configured: a `<name>.json` beside a file wins. Otherwise adeck looks in the JSON files of the file's folder and the one above for an object that names the file, and takes that object and the fields around it.
+
+Caches (analysis, spectrograms, earshot output, S3 downloads) live in `~/Library/Caches/adeck`.
+
+## Develop
+
+```sh
+just          # lists everything
+just hot      # the app with live editing: UI edits patch into the open window
+just check    # clippy on every save (bacon)
+just test     # unit and UI tests, then every headless scene into target/snaps/
+just snap compare
+```
+
+`just hot` uses Rune's own live editing (Dioxus's subsecond hot patching). It needs Dioxus CLI 0.7.10 (`cargo install dioxus-cli@0.7.10 --locked`; Homebrew's `dx` is a different program). A changed function body in `src/ui/` or `src/app.rs` patches into the open window in about a second and keeps the open tabs. Any other change rebuilds and relaunches, and the tabs come back. `just hot --snap-on-patch target/hot.png` renders headless and writes a PNG after every patch, for an agent checking its own UI edits.
+
+Every headless scene renders from fixture audio adeck writes itself: `adeck --snap out.png --scene single|compare|blind|run|empty`.
 
 ## Licence
 
-GPL-2.0-or-later. Built with [Rune](https://github.com/anomalyco/rune) and the [rbxport](https://github.com/chrisle/rbxport) crates.
+GPL-2.0-or-later, as Sleeve. Built with [Rune](https://github.com/anomalyco/rune), [rbxport](https://github.com/chrisle/rbxport)'s analyser, symphonia and cpal.

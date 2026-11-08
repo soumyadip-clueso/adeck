@@ -167,6 +167,10 @@ fn call_tool(name: &str, args: &Value, ctx: &Ctx) -> Value {
             Err(e) => text_result(Err(e)),
         },
         "analyze" => text_result(analyze(args, ctx)),
+        "list_runs" | "list_items" | "get_item" => {
+            let scores = feedback::latest_scores(&feedback::read(&ctx.feedback_path));
+            text_result(crate::app::read_tool(&ctx.cfg, &scores, name, args))
+        }
         _ if tools().iter().any(|t| t["name"] == name) => text_result(ctx.ui(name, args.clone())),
         _ => text_result(Err(format!("No tool {name}."))),
     }

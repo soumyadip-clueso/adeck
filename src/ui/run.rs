@@ -27,7 +27,12 @@ pub fn cell_value(s: &App, e: &Entry, col: &str) -> String {
         "name" => it.name.clone(),
         "what" => it.pick(&["mood", "type", "kind"]).unwrap_or("").to_owned(),
         "model" => it.pick(&["model"]).unwrap_or("").to_owned(),
-        "secs" => e.analysis.as_ref().map(|a| format!("{:.1}", a.secs)).or_else(|| it.pick(&["duration", "duration_s", "secs", "length"]).map(str::to_owned)).unwrap_or_default(),
+        "secs" => e
+            .analysis
+            .as_ref()
+            .map(|a| format!("{:.1}", a.secs))
+            .or_else(|| it.pick(&["duration", "duration_s", "seconds", "secs", "length"]).map(str::to_owned))
+            .unwrap_or_default(),
         "bpm" => it.pick(&["bpm", "tempo"]).map(str::to_owned).or_else(|| e.analysis.as_ref().and_then(|a| a.bpm).map(|b| format!("{b:.0}"))).unwrap_or_default(),
         "lufs" => it.pick(&["lufs", "loudness", "lufs_i"]).map(str::to_owned).or_else(|| e.analysis.as_ref().and_then(|a| a.lufs).map(|l| format!("{l:.1}"))).unwrap_or_default(),
         "flags" => it.pick(&["flags"]).unwrap_or("").to_owned(),
