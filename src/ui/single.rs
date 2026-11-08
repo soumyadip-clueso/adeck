@@ -13,7 +13,8 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let e = s.entry(&id);
     let total = widgets::tab_secs(s, t);
 
-    let mut name = row().gap(8.0).center_y().min_w(0.0).child(text(e.map_or_else(|| id.clone(), |e| e.item.name.clone())).key("name").font(k.ty.ui_medium).color(c.text_base).truncate());
+    let mut name =
+        row().gap(8.0).center_y().min_w(0.0).child(text(e.map_or_else(|| id.clone(), |e| e.item.name.clone())).key("name").font(k.ty.ui_medium).color(c.text_base).truncate());
     if e.is_some_and(|e| e.item.is_ref) {
         name = name.child(widgets::ref_badge(k));
     }
@@ -43,7 +44,13 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let prompt = e.and_then(|e| e.item.pick(&["prompt", "caption", "text"]).map(str::to_owned));
     let meta: Vec<(String, String)> = e.map(|e| e.item.meta.clone()).unwrap_or_default();
     let src = e.and_then(|e| e.item.meta_src.as_ref()).and_then(|p| p.file_name()).map(|n| format!("from {}", n.to_string_lossy())).unwrap_or_default();
-    let mut left = col().key("meta").w_frac(0.58).h_full().min_h(0.0).gap(6.0).child(row().gap(8.0).child(widgets::section_title("Metadata", k)).child(text(src).font(k.ty.small).color(c.text_faint)));
+    let mut left = col()
+        .key("meta")
+        .w_frac(0.58)
+        .h_full()
+        .min_h(0.0)
+        .gap(6.0)
+        .child(row().gap(8.0).child(widgets::section_title("Metadata", k)).child(text(src).font(k.ty.small).color(c.text_faint)));
     if let Some(p) = prompt {
         left = left.child(text(p).key("prompt").font(k.ty.body).color(c.text_base).wrap().selectable(true));
     }

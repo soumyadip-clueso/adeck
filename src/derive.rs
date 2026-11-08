@@ -154,11 +154,11 @@ pub fn loudness(pcm: &Pcm) -> Option<f64> {
     if pcm.frames() == 0 {
         return None;
     }
-    let shelf = Biquad::high_shelf(fs, 1681.974_450_955_531_9, 3.999_843_853_973_347, 0.707_175_236_955_419_3);
+    let shelf = Biquad::high_shelf(fs, 1_681.974_450_955_532, 3.999_843_853_973_347, 0.707_175_236_955_419_3);
     let hp = Biquad::high_pass(fs, 38.135_470_876_139_82, 0.500_327_037_325_395_3);
     let mut z = Vec::with_capacity(pcm.frames());
     let (mut s0, mut s1, mut h0, mut h1) = (shelf, shelf, hp, hp);
-    for f in pcm.samples.chunks_exact(2) {
+    for f in pcm.samples.as_chunks::<2>().0 {
         let l = h0.run(s0.run(f64::from(f[0])));
         let r = h1.run(s1.run(f64::from(f[1])));
         z.push(l * l + r * r);

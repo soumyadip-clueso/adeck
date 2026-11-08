@@ -31,7 +31,7 @@ impl Pcm {
         self.frames() as f64 / f64::from(self.rate.max(1))
     }
     pub fn mono(&self) -> Vec<f32> {
-        self.samples.chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+        self.samples.as_chunks::<2>().0.iter().map(|f| (f[0] + f[1]) * 0.5).collect()
     }
 }
 
@@ -69,7 +69,9 @@ fn decode_symphonia(path: &Path) -> Result<Pcm, String> {
             Ok(p) => p,
             Err(SymErr::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(SymErr::ResetRequired) => break,
-            Err(e) => return if out.is_empty() { Err(format!("read failed: {e}")) } else { Ok(stereo(out, channels, rate)) },
+            Err(e) => {
+                return if out.is_empty() { Err(format!("read failed: {e}")) } else { Ok(stereo(out, channels, rate)) };
+            }
         };
         if packet.track_id() != track_id {
             continue;
@@ -125,8 +127,10 @@ pub fn resample(pcm: &Pcm, to: u32) -> Pcm {
     }
     let frames = pcm.frames();
     let chunk = 1024;
-    let Ok(mut rs) = FftFixedIn::<f32>::new(pcm.rate as usize, to as usize, chunk, 2, 2) else { return pcm.clone() };
-    let (l, r): (Vec<f32>, Vec<f32>) = pcm.samples.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+    let Ok(mut rs) = FftFixedIn::<f32>::new(pcm.rate as usize, to as usize, chunk, 2, 2) else {
+        return pcm.clone();
+    };
+    let (l, r): (Vec<f32>, Vec<f32>) = pcm.samples.as_chunks::<2>().0.iter().map(|f| (f[0], f[1])).unzip();
     let mut out_l = Vec::with_capacity(frames * to as usize / pcm.rate as usize + chunk);
     let mut out_r = Vec::with_capacity(out_l.capacity());
     let mut i = 0;

@@ -94,7 +94,6 @@ fn critique(v: &Value, k: &Kit) -> El {
     let c = &k.c;
     let verdict = v.get("verdict").and_then(Value::as_str).unwrap_or("–").to_owned();
     let score = v.get("score").and_then(Value::as_f64).map_or("–".into(), |s| format!("{s:.0}"));
-    let good = matches!(verdict.as_str(), "launch-grade" | "close");
     let mut out = col().gap(8.0).child(widgets::section_title("Scorecard", k)).child(
         row()
             .gap(18.0)
@@ -103,17 +102,26 @@ fn critique(v: &Value, k: &Kit) -> El {
             .child(widgets::stat("Critical", v.get("critical_issues").map_or("0".into(), |x| x.to_string()), k))
             .child(widgets::stat("Major", v.get("major_issues").map_or("0".into(), |x| x.to_string()), k)),
     );
-    let _ = good;
     if let Some(ms) = v.get("metrics").and_then(Value::as_array) {
         let mut list = col().gap(2.0);
-        for m in ms.iter().filter(|m| m.get("status").and_then(Value::as_str).is_some_and(|s| s != "ok" && s != "in range")).take(10) {
+        for m in ms.iter().filter(|m| m.get("status").and_then(Value::as_str).is_some_and(|s| s == "low" || s == "high")).take(10) {
             let name = m.get("metric").and_then(Value::as_str).unwrap_or("?").to_owned();
             let val = m.get("value").map_or("–".into(), fmt);
-            let range = match (m.get("min"), m.get("max")) {
-                (Some(a), Some(b)) => format!("{}–{}", fmt(a), fmt(b)),
-                _ => String::new(),
+            let unit = m.get("unit").and_then(Value::as_str).unwrap_or("");
+            let range = match m.get("range").and_then(Value::as_array).map(|r| (r.first().cloned().unwrap_or(Value::Null), r.get(1).cloned().unwrap_or(Value::Null))) {
+                Some((Value::Null, b)) if !b.is_null() => format!("≤ {} {unit}", fmt(&b)),
+                Some((a, Value::Null)) if !a.is_null() => format!("≥ {} {unit}", fmt(&a)),
+                Some((a, b)) => format!("{}–{} {unit}", fmt(&a), fmt(&b)),
+                None => String::new(),
             };
-            list = list.child(row().gap(8.0).child(text(name).font(k.ty.small).color(c.text_muted).w(150.0).truncate()).child(text(val).font(k.ty.small.features("'tnum' 1")).color(c.warning.fg).w(70.0)).child(text(range).font(k.ty.small).color(c.text_faint)));
+            let name = m.get("label").and_then(Value::as_str).map_or(name, str::to_owned);
+            list = list.child(
+                row()
+                    .gap(8.0)
+                    .child(text(name).font(k.ty.small).color(c.text_muted).w(150.0).truncate())
+                    .child(text(val).font(k.ty.small.features("'tnum' 1")).color(c.warning.fg).w(70.0))
+                    .child(text(range).font(k.ty.small).color(c.text_faint)),
+            );
         }
         out = out.child(list);
     }
@@ -136,60 +144,60 @@ fn fmt(v: &Value) -> String {
     }
 }
 
-/// Every cut as a tick: on a beat (green), covered by a hit (amber), or missed (red), as the
-/// eval pages draw it. Read from the critique's per-cut list when it has one.
+/// Every picture cut as a tick: with a hit (green), with some sound but no hit (amber), or
+/// silent (red), from the critique's `events`.
 fn cut_strip(critique: Option<&Value>, total: f64, k: &Kit) -> El {
     let c = &k.c;
     let mut strip = el().key("cuts").w_full().h(22.0).radius(4.0).fill(c.layer_01);
     let Some(cuts) = critique.and_then(cuts_of) else {
         return strip.child(text("Cuts show here once earshot critique has run on a video.").font(k.ty.small).color(c.text_faint).px(8.0).py(3.0));
     };
-    if total <= 0.0 {
-        return strip;
+    if total <= 0.0 || cuts.is_empty() {
+        return strip.child(text("No picture cuts found.").font(k.ty.small).color(c.text_faint).px(8.0).py(3.0));
     }
     let mut shape = rune::Shape::new();
     for (t, kind) in &cuts {
         let x = (*t / total).clamp(0.0, 1.0) as f32 * 1000.0;
         let ink = match kind {
-            Cut::Beat => rune::oklch(0.75, 0.17, 145.0),
-            Cut::Hit => rune::oklch(0.8, 0.15, 80.0),
-            Cut::Miss => rune::oklch(0.65, 0.2, 25.0),
+            Cut::Hit => rune::oklch(0.75, 0.17, 145.0),
+            Cut::Sound => rune::oklch(0.8, 0.15, 80.0),
+            Cut::Silent => rune::oklch(0.65, 0.2, 25.0),
         };
         shape = shape.line([x, 2.0], [x, 20.0], 4.0, rune::LineCap::Round, ink);
     }
     strip = strip.child(rune::canvas(shape.view_box(1000.0, 22.0)).absolute(0.0, 0.0).w_full().h_full().inert());
-    let (b, h, m) = cuts.iter().fold((0, 0, 0), |(b, h, m), (_, k)| match k {
-        Cut::Beat => (b + 1, h, m),
-        Cut::Hit => (b, h + 1, m),
-        Cut::Miss => (b, h, m + 1),
+    let (h, so, si) = cuts.iter().fold((0, 0, 0), |(h, so, si), (_, k)| match k {
+        Cut::Hit => (h + 1, so, si),
+        Cut::Sound => (h, so + 1, si),
+        Cut::Silent => (h, so, si + 1),
     });
-    strip.help(format!("{} cuts: {b} on a beat, {h} with a hit, {m} missed", cuts.len()))
+    strip.help(format!("{} cuts: {h} with a hit, {so} with some sound, {si} silent", cuts.len()))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Cut {
-    Beat,
     Hit,
-    Miss,
+    Sound,
+    Silent,
 }
 
-/// The per-cut list in a critique, whatever its field is called.
+/// The critique's picture cuts and what each got.
 fn cuts_of(v: &Value) -> Option<Vec<(f64, Cut)>> {
-    let list = ["cuts", "cut_sync", "cut_list"].iter().find_map(|k| v.get(*k).and_then(Value::as_array)).or_else(|| v.get("sync").and_then(|s| s.get("cuts")).and_then(Value::as_array))?;
-    let out: Vec<(f64, Cut)> = list
-        .iter()
-        .filter_map(|c| {
-            let t = c.get("t").or_else(|| c.get("time")).or_else(|| c.get("time_s")).and_then(Value::as_f64)?;
-            let near = |k: &str| c.get(k).and_then(Value::as_f64).is_some_and(|ms| ms.abs() <= 50.0);
-            let kind = if near("beat_ms") || near("b") || c.get("on_beat").and_then(Value::as_bool) == Some(true) {
-                Cut::Beat
-            } else if near("hit_ms") || near("o") || c.get("hit").and_then(Value::as_bool) == Some(true) || c.get("has_sound").and_then(Value::as_bool) == Some(true) {
-                Cut::Hit
-            } else {
-                Cut::Miss
-            };
-            Some((t, kind))
-        })
-        .collect();
-    (!out.is_empty()).then_some(out)
+    let ev = v.get("events")?;
+    let times = |k: &str| -> Vec<f64> { ev.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default() };
+    let silent = times("visual_without_any_sound");
+    let no_hit = times("visual_without_hit");
+    let near = |list: &[f64], t: f64| list.iter().any(|x| (x - t).abs() < 0.01);
+    Some(times("visual").into_iter().map(|t| (t, if near(&silent, t) { Cut::Silent } else if near(&no_hit, t) { Cut::Sound } else { Cut::Hit })).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cuts_are_read_from_critique_events() {
+        let v = serde_json::json!({"events": {"visual": [1.0, 2.0, 3.0], "visual_without_hit": [2.0, 3.0], "visual_without_any_sound": [3.0]}});
+        assert_eq!(cuts_of(&v).unwrap(), vec![(1.0, Cut::Hit), (2.0, Cut::Sound), (3.0, Cut::Silent)]);
+    }
 }

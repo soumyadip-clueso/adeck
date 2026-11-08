@@ -1,5 +1,8 @@
 //! Long-running work: downloads from S3, earshot runs.
 //!
+//! Kept whole from Sleeve: workers use the parts they need (progress, logs, cancel).
+#![allow(dead_code)]
+//!
 //! Every job gets its own id, its own cancel token and its own row in the status bar. A stop
 //! button is built from the job it sits next to and captures only that job's id, so it can
 //! only ever stop that job. Nothing here is shared between jobs: no global "busy" flag, no
@@ -14,9 +17,9 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rune::Waker;
@@ -180,9 +183,11 @@ pub enum Phase {
     /// Stop was pressed and the worker hasn't finished winding down yet.
     Stopping,
     /// Finished, at this many seconds on the app clock.
-    Done { outcome: Outcome, at: f64 },
+    Done {
+        outcome: Outcome,
+        at: f64,
+    },
 }
-
 
 #[derive(Clone, Debug)]
 pub struct Job {
@@ -339,7 +344,6 @@ impl Jobs {
         self.list.iter().find(|j| j.id == id)
     }
 
-
     /// Starts `work` on its own thread. Whatever it returns becomes the job's outcome. If it
     /// panics, the job fails with a message rather than taking the app down.
     pub fn spawn<F>(&mut self, kind: JobKind, title: impl Into<String>, work: F) -> JobId
@@ -401,7 +405,9 @@ impl Jobs {
 
     /// Asks one job to stop. Only the job with this id is touched.
     pub fn cancel(&mut self, id: JobId) {
-        let Some(j) = self.list.iter_mut().find(|j| j.id == id) else { return };
+        let Some(j) = self.list.iter_mut().find(|j| j.id == id) else {
+            return;
+        };
         if j.phase != Phase::Running {
             return;
         }

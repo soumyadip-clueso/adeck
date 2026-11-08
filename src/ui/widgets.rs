@@ -73,14 +73,19 @@ pub fn tab_secs(s: &App, tab: &Tab) -> f64 {
 
 /// A waveform strip for one member: its picture, beat grid, loop, playhead, and a click to seek
 /// or a drag to loop. `total` is the time the strip's width stands for.
+#[allow(clippy::too_many_arguments)]
 pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, total: f64, k: &Kit) -> El {
     let mut strip = el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
-    let Some(e) = e else { return strip.child(loading("Opening…", k)) };
+    let Some(e) = e else {
+        return strip.child(loading("Opening…", k));
+    };
     let Some(a) = &e.analysis else {
         let why = e.failed.clone().unwrap_or_else(|| "Analysing…".into());
         return strip.child(loading(&why, k));
     };
-    let frac_of = |secs: f64| if total > 0.0 { (secs / total).clamp(0.0, 1.0) as f32 } else { 0.0 };
+    let frac_of = |secs: f64| {
+        if total > 0.0 { (secs / total).clamp(0.0, 1.0) as f32 } else { 0.0 }
+    };
     let own = frac_of(a.secs);
     strip = strip.child(el().absolute(0.0, 0.0).h_full().w(width * own).pixels(&e.wave).inert());
     if !a.beats.is_empty() && total > 0.0 {
@@ -103,9 +108,13 @@ pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
 }
 
 /// The spectrogram strip for one member, with the same playhead and loop.
+#[allow(clippy::too_many_arguments)]
 pub fn spec_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, total: f64, k: &Kit) -> El {
-    let mut strip = el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(oklch(0.12, 0.01, 290.0)).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
-    let Some(a) = e.and_then(|e| e.analysis.as_ref()) else { return strip };
+    let mut strip =
+        el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(oklch(0.12, 0.01, 290.0)).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
+    let Some(a) = e.and_then(|e| e.analysis.as_ref()) else {
+        return strip;
+    };
     let own = if total > 0.0 { (a.secs / total).clamp(0.0, 1.0) as f32 } else { 1.0 };
     strip = strip.child(el().absolute(0.0, 0.0).h_full().w(width * own).pixels(&e.unwrap().spec).inert());
     // Frequency marks on the log axis the spectrogram uses.
@@ -131,7 +140,8 @@ fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, total: f
     }
     let x_of = |secs: f64| (secs / total).clamp(0.0, 1.0) as f32 * width;
     if let Some((a, b)) = tab.loop_secs {
-        strip = strip.child(el().absolute(x_of(a), 0.0).w((x_of(b) - x_of(a)).max(1.0)).h(height).fill(k.c.icon_accent.alpha(0.16)).border(1.0, k.c.icon_accent.alpha(0.6)).inert());
+        strip =
+            strip.child(el().absolute(x_of(a), 0.0).w((x_of(b) - x_of(a)).max(1.0)).h(height).fill(k.c.icon_accent.alpha(0.16)).border(1.0, k.c.icon_accent.alpha(0.6)).inert());
     }
     let x = x_of(playhead(s, tab));
     strip.child(el().absolute(x - 1.0, 0.0).w(2.0).h(height).fill(Color::WHITE).inert())
@@ -175,7 +185,11 @@ pub fn transport(s: &App, tab: &Tab, k: &Kit) -> El {
         .build(k)
         .key("play");
     let total = tab_secs(s, tab);
-    let mut r = row().gap(10.0).center_y().child(play).child(text(format!("{} / {}", clock(playhead(s, tab)), clock(total))).key("clock").font(k.ty.body_medium.features("'tnum' 1")).color(c.text_base));
+    let mut r = row()
+        .gap(10.0)
+        .center_y()
+        .child(play)
+        .child(text(format!("{} / {}", clock(playhead(s, tab)), clock(total))).key("clock").font(k.ty.body_medium.features("'tnum' 1")).color(c.text_base));
     if s.mixer_is_for(tab.id()) && s.mixer.is_loading() {
         r = r.child(rune_kit::Spinner::new().size(12.0).build(k));
     }
@@ -242,7 +256,13 @@ pub fn kv_table(key: &str, rows: &[(String, String)], highlight: &dyn Fn(&str) -
                 .px(8.0)
                 .py(4.0)
                 .gap(12.0)
-                .fill(if hot { c.icon_accent.alpha(0.10) } else if i % 2 == 1 { c.layer_01 } else { Color::TRANSPARENT })
+                .fill(if hot {
+                    c.icon_accent.alpha(0.10)
+                } else if i % 2 == 1 {
+                    c.layer_01
+                } else {
+                    Color::TRANSPARENT
+                })
                 .child(text(name.clone()).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).w(180.0).truncate().help_when_truncated(name.clone()))
                 .child(text(value.clone()).font(k.ty.small.features("'tnum' 1")).color(c.text_base).wrap().grow(1.0).min_w(0.0).selectable(true)),
         );
@@ -260,8 +280,14 @@ pub fn stat(label: &str, value: String, k: &Kit) -> El {
 
 /// The native numbers for one file.
 pub fn stats(e: Option<&Entry>, trim_db: Option<f64>, k: &Kit) -> El {
-    let Some(a) = e.and_then(|e| e.analysis.as_ref()) else { return row() };
-    let mut r = row().gap(18.0).center_y().child(stat("Length", clock(a.secs), k)).child(stat("LUFS", a.lufs.map_or("–".into(), |l| format!("{l:.1}")), k)).child(stat("Peak", format!("{:.1} dB", a.peak_dbfs), k));
+    let Some(a) = e.and_then(|e| e.analysis.as_ref()) else {
+        return row();
+    };
+    let mut r = row().gap(18.0).center_y().child(stat("Length", clock(a.secs), k)).child(stat("LUFS", a.lufs.map_or("–".into(), |l| format!("{l:.1}")), k)).child(stat(
+        "Peak",
+        format!("{:.1} dB", a.peak_dbfs),
+        k,
+    ));
     if let Some(b) = a.bpm {
         r = r.child(stat("BPM", format!("{b:.1}"), k));
     }
@@ -270,14 +296,20 @@ pub fn stats(e: Option<&Entry>, trim_db: Option<f64>, k: &Kit) -> El {
     }
     r = r.child(stat("Rate", format!("{} Hz · {}ch", a.rate, a.channels), k));
     if let Some(t) = trim_db {
-        r = r.child(stat("Match", format!("{t:+.1} dB", ), k));
+        r = r.child(stat("Match", format!("{t:+.1} dB",), k));
     }
     r
 }
 
 /// The REF badge for the local-only reference pack.
 pub fn ref_badge(k: &Kit) -> El {
-    row().px(5.0).py(1.0).radius(4.0).fill(oklch(0.75, 0.15, 75.0)).child(text("REF").font(rune::TextStyle { size: 10.0, ..k.ty.small_medium }).color(oklch(0.2, 0.02, 0.0))).help("From the local-only reference pack. Never published.")
+    row()
+        .px(5.0)
+        .py(1.0)
+        .radius(4.0)
+        .fill(oklch(0.75, 0.15, 75.0))
+        .child(text("REF").font(rune::TextStyle { size: 10.0, ..k.ty.small_medium }).color(oklch(0.2, 0.02, 0.0)))
+        .help("From the local-only reference pack. Never published.")
 }
 
 /// The LLM's pinned note.
@@ -333,7 +365,10 @@ pub fn earshot_panel(s: &App, e: &Entry, k: &Kit) -> El {
     if let Some(v) = e.earshot.get("measure") {
         let rows = crate::item::flatten(v);
         panel = panel.child(col().w_full().gap(2.0).children(rows.into_iter().filter(|(kk, _)| !kk.contains("path")).take(16).map(|(kk, vv)| {
-            row().gap(8.0).child(text(kk).font(k.ty.small).color(c.text_faint).w(140.0).truncate()).child(text(vv).font(k.ty.small.features("'tnum' 1")).color(c.text_base).truncate().grow(1.0).min_w(0.0))
+            row()
+                .gap(8.0)
+                .child(text(kk).font(k.ty.small).color(c.text_faint).w(140.0).truncate())
+                .child(text(vv).font(k.ty.small.features("'tnum' 1")).color(c.text_base).truncate().grow(1.0).min_w(0.0))
         })));
     }
     panel

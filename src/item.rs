@@ -112,8 +112,14 @@ pub fn find_meta(path: &Path) -> Option<(Value, PathBuf)> {
     }
     let name = path.file_name()?.to_str()?;
     let dir = path.parent()?;
-    for folder in [Some(dir), dir.parent()].into_iter().flatten() {
-        let Ok(rd) = std::fs::read_dir(folder) else { continue };
+    // A JSON beside the file may name it alone; one a folder up must name its folder too, since
+    // sibling folders often hold files with the same names.
+    let with_dir = format!("{}/{name}", dir.file_name()?.to_str()?);
+    for (folder, want) in [(Some(dir), name), (dir.parent(), with_dir.as_str())] {
+        let Some(folder) = folder else { continue };
+        let Ok(rd) = std::fs::read_dir(folder) else {
+            continue;
+        };
         let mut jsons: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
         jsons.sort();
         for j in jsons {
@@ -122,7 +128,7 @@ pub fn find_meta(path: &Path) -> Option<(Value, PathBuf)> {
                 continue;
             }
             let Some(v) = read_json(&j) else { continue };
-            if let Some(found) = naming(&v, name, &serde_json::Map::new()) {
+            if let Some(found) = naming(&v, want, &serde_json::Map::new()) {
                 return Some((found, j));
             }
         }
@@ -151,7 +157,7 @@ fn naming(v: &Value, name: &str, around: &serde_json::Map<String, Value>) -> Opt
                     return Some(found);
                 }
             }
-            let names_it = map.values().any(|x| x.as_str().is_some_and(|s| s == name || s.ends_with(&format!("/{name}"))));
+            let names_it = map.values().any(|x| x.as_str().is_some_and(|s| s == name || s.ends_with(&format!("/{name}")) || Path::new(s).ends_with(name)));
             if names_it {
                 let mut out = around.clone();
                 for (k, x) in map {
@@ -175,7 +181,9 @@ pub fn flatten(v: &Value) -> Vec<(String, String)> {
 }
 
 fn walk(v: &Value, prefix: String, out: &mut Vec<(String, String)>) {
-    let key = |k: &str| if prefix.is_empty() { k.to_owned() } else { format!("{prefix}.{k}") };
+    let key = |k: &str| {
+        if prefix.is_empty() { k.to_owned() } else { format!("{prefix}.{k}") }
+    };
     match v {
         Value::Object(map) => {
             for (k, x) in map {
@@ -262,8 +270,33 @@ mod tests {
     }
 
     #[test]
+    fn a_summary_one_folder_up_must_name_the_folder_too() {
+        let root = std::env::temp_dir().join(format!("adeck-meta-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for kind in ["boom-deep", "whoosh-soft"] {
+            std::fs::create_dir_all(root.join(kind)).unwrap();
+            std::fs::write(root.join(kind).join("t0-0-raw.wav"), b"").unwrap();
+            let summary = json!({"kind": kind, "takes": [{"versions": [{"chain": "raw", "path": format!("work/{kind}/t0-0-raw.wav")}]}]});
+            std::fs::write(root.join(format!("{kind}.json")), summary.to_string()).unwrap();
+        }
+        let (v, src) = find_meta(&root.join("whoosh-soft/t0-0-raw.wav")).unwrap();
+        assert_eq!(v["kind"], "whoosh-soft");
+        assert!(src.ends_with("whoosh-soft.json"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn differing_keys_include_ones_an_item_lacks() {
-        let mk = |meta: Vec<(&str, &str)>| Item { id: String::new(), path: PathBuf::new(), name: String::new(), media: Media::Audio, run: None, is_ref: false, meta: meta.into_iter().map(|(a, b)| (a.into(), b.into())).collect(), meta_src: None };
+        let mk = |meta: Vec<(&str, &str)>| Item {
+            id: String::new(),
+            path: PathBuf::new(),
+            name: String::new(),
+            media: Media::Audio,
+            run: None,
+            is_ref: false,
+            meta: meta.into_iter().map(|(a, b)| (a.into(), b.into())).collect(),
+            meta_src: None,
+        };
         let a = mk(vec![("model", "sa3"), ("seed", "1"), ("steps", "8")]);
         let b = mk(vec![("model", "sa3"), ("seed", "2")]);
         assert_eq!(differing(&[&a, &b]), vec!["seed".to_owned(), "steps".to_owned()]);

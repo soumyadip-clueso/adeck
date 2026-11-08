@@ -65,7 +65,7 @@ pub fn cache_dir() -> PathBuf {
 
 pub fn expand(p: &Path) -> PathBuf {
     match p.to_str() {
-        Some(s) if s == "~" => home(),
+        Some("~") => home(),
         Some(s) if s.starts_with("~/") => home().join(&s[2..]),
         _ => p.to_path_buf(),
     }
@@ -74,7 +74,9 @@ pub fn expand(p: &Path) -> PathBuf {
 impl Config {
     pub fn load() -> (Config, Option<String>) {
         let path = dir().join("config.toml");
-        let Ok(src) = std::fs::read_to_string(&path) else { return (Config::default(), None) };
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            return (Config::default(), None);
+        };
         match toml::from_str::<Config>(&src) {
             Ok(mut c) => {
                 c.run_roots = c.run_roots.iter().map(|p| expand(p)).collect();

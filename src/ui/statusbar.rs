@@ -100,9 +100,13 @@ fn chip(job: &Job, k: &Kit) -> El {
     let c = &k.c;
     let id = job.id;
     let (lead, title, ink) = face(job, k);
-    let mut body = row().grow(1.0).min_w(0.0).gap(8.0).center_y().child(lead.key(id.key("lead"))).child(
-        text(title).key(id.key("title")).font(k.ty.small_medium).color(ink).truncate().shrink(),
-    );
+    let mut body = row()
+        .grow(1.0)
+        .min_w(0.0)
+        .gap(8.0)
+        .center_y()
+        .child(lead.key(id.key("lead")))
+        .child(text(title).key(id.key("title")).font(k.ty.small_medium).color(ink).truncate().shrink());
     if job.is_active() {
         body = body.child(bar(job, 40.0, k));
         if let Some(f) = job.fraction() {
@@ -145,7 +149,9 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
         let open = s.log_open == Some(id);
         let (lead, title, ink) = face(job, k);
         let detail = match (&job.phase, job.detail.is_empty()) {
-            (Phase::Running | Phase::Stopping, false) => format!("{} · {}", job.detail, elapsed(job)),
+            (Phase::Running | Phase::Stopping, false) => {
+                format!("{} · {}", job.detail, elapsed(job))
+            }
             (Phase::Running | Phase::Stopping, true) => elapsed(job),
             (Phase::Done { .. }, _) => job.title.clone(),
         };
@@ -160,7 +166,13 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
         r = r.child(spacer());
         if job.is_active() {
             r = r.child(bar(job, 140.0, k));
-            r = r.child(text(job.fraction().map_or_else(String::new, |f| format!("{:.0}%", f * 100.0))).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).w(34.0).align(rune::Align::End));
+            r = r.child(
+                text(job.fraction().map_or_else(String::new, |f| format!("{:.0}%", f * 100.0)))
+                    .font(k.ty.small.features("'tnum' 1"))
+                    .color(c.text_muted)
+                    .w(34.0)
+                    .align(rune::Align::End),
+            );
         }
         let warnings = job.log.iter().filter(|l| l.level != Level::Info).count();
         let label = if warnings > 0 { format!("Log · {warnings}") } else { "Log".to_owned() };
@@ -209,7 +221,15 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
                 .build(k)
                 .key("activity-logfile"),
         )
-        .child(IconButton::new(&icons::CLOSE).variant(IconButtonVariant::GhostMuted).control_size(ControlSize::Small).label("Close activity").on_press(|s: &mut App| s.activity_open = false).build(k).key("activity-close"));
+        .child(
+            IconButton::new(&icons::CLOSE)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .label("Close activity")
+                .on_press(|s: &mut App| s.activity_open = false)
+                .build(k)
+                .key("activity-close"),
+        );
     Some(
         col()
             .key("activity")
@@ -228,7 +248,10 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
 /// How long a running job has been going: "0:42".
 fn elapsed(job: &Job) -> String {
     let secs = job.started.elapsed().as_secs() as u32;
-    format!("running {}", { let s = secs; format!("{}:{:02}", s / 60, s % 60) })
+    format!("running {}", {
+        let s = secs;
+        format!("{}:{:02}", s / 60, s % 60)
+    })
 }
 
 /// One job's log: every line with its time and level, newest at the bottom, and a copy button.
@@ -245,9 +268,9 @@ fn log(job: &Job, k: &Kit) -> El {
         row()
             .w_full()
             .gap(8.0)
-            .child(text(l.clock.clone()).font(mono.clone()).color(c.text_faint))
-            .child(text(tag).font(mono.clone()).color(ink))
-            .child(text(l.text.clone()).font(mono.clone()).color(if l.level == Level::Info { c.text_base } else { ink }).wrap().selectable(true).grow(1.0).min_w(0.0))
+            .child(text(l.clock.clone()).font(mono).color(c.text_faint))
+            .child(text(tag).font(mono).color(ink))
+            .child(text(l.text.clone()).font(mono).color(if l.level == Level::Info { c.text_base } else { ink }).wrap().selectable(true).grow(1.0).min_w(0.0))
     });
     let body = col().key(id.key("log-lines")).w_full().max_h(220.0).py(8.0).px(10.0).gap(3.0).scroll(rune::ScrollSpec { stick_bottom: true }).children(lines);
     let copy = rune_kit::Button::new("Copy log")
@@ -265,15 +288,7 @@ fn log(job: &Job, k: &Kit) -> El {
         .w_full()
         .px(INSET)
         .pb(10.0)
-        .child(
-            col()
-                .w_full()
-                .radius(k.radius.md)
-                .fill(c.layer_01)
-                .border(1.0, c.border_muted)
-                .child(body)
-                .child(row().w_full().px(4.0).pb(4.0).child(spacer()).child(copy)),
-        )
+        .child(col().w_full().radius(k.radius.md).fill(c.layer_01).border(1.0, c.border_muted).child(body).child(row().w_full().px(4.0).pb(4.0).child(spacer()).child(copy)))
 }
 
 /// A thin progress bar. Indeterminate while the job is still counting its work.

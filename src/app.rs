@@ -85,8 +85,6 @@ pub struct Tab {
     pub videos: Vec<rune::Player>,
     /// The member a blind pick chose, by member index, once picked.
     pub picked: Option<usize>,
-    /// The spectrogram or metadata panel's view.
-    pub show_sheet: bool,
 }
 
 impl Tab {
@@ -105,7 +103,6 @@ impl Tab {
             loading: false,
             videos: Vec::new(),
             picked: None,
-            show_sheet: false,
         }
     }
     pub fn id(&self) -> u64 {
@@ -142,7 +139,17 @@ pub struct Entry {
 
 impl Entry {
     fn new(item: Item) -> Entry {
-        let mut e = Entry { item, analysis: None, analysing: false, failed: None, wave: Pixels::new(), spec: Pixels::new(), earshot: HashMap::new(), earshot_busy: HashSet::new(), sheet: None };
+        let mut e = Entry {
+            item,
+            analysis: None,
+            analysing: false,
+            failed: None,
+            wave: Pixels::new(),
+            spec: Pixels::new(),
+            earshot: HashMap::new(),
+            earshot_busy: HashSet::new(),
+            sheet: None,
+        };
         for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
             if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {
                 e.earshot.insert(cmd.name(), v);
@@ -244,12 +251,6 @@ impl App {
         }
     }
 
-    fn wake(&self) {
-        if let Some(w) = &self.waker {
-            w();
-        }
-    }
-
     pub fn tab(&self, id: u64) -> Option<&Tab> {
         self.tabs.iter().find(|t| t.id() == id)
     }
@@ -269,6 +270,7 @@ impl App {
 
     // Opening tabs.
 
+    #[allow(clippy::too_many_arguments)]
     pub fn open(&mut self, kind: TabKind, items: Vec<String>, label: Option<String>, blind: bool, loudness_match: bool, run: Option<String>, filter: Option<String>) -> u64 {
         let id = self.next_tab;
         self.next_tab += 1;
@@ -300,7 +302,11 @@ impl App {
                         w();
                     }
                 };
-                if self.headless { work() } else { std::thread::spawn(work); }
+                if self.headless {
+                    work()
+                } else {
+                    std::thread::spawn(work);
+                }
             }
             return;
         }
@@ -346,7 +352,9 @@ impl App {
     }
 
     fn analyse(&mut self, id: &str) {
-        let Some(e) = self.items.get_mut(id) else { return };
+        let Some(e) = self.items.get_mut(id) else {
+            return;
+        };
         e.analysing = true;
         let path = e.item.path.clone();
         let tx = self.tx.clone();
@@ -368,7 +376,9 @@ impl App {
 
     /// Runs earshot on an item in the background; the tab shows it when it lands.
     pub fn run_earshot(&mut self, id: &str, cmd: Earshot) {
-        let Some(e) = self.items.get_mut(id) else { return };
+        let Some(e) = self.items.get_mut(id) else {
+            return;
+        };
         if e.earshot.contains_key(cmd.name()) || !e.earshot_busy.insert(cmd.name()) {
             return;
         }
@@ -389,7 +399,9 @@ impl App {
     }
 
     pub fn run_sheet(&mut self, id: &str) {
-        let Some(e) = self.items.get_mut(id) else { return };
+        let Some(e) = self.items.get_mut(id) else {
+            return;
+        };
         if e.sheet.is_some() || !e.earshot_busy.insert("sheet") {
             return;
         }
@@ -427,7 +439,9 @@ impl App {
     /// Moves a tab to `to` in the strip.
     pub fn reorder(&mut self, id: &str, to: usize) {
         let Ok(id) = id.parse::<u64>() else { return };
-        let Some(from) = self.tabs.iter().position(|t| t.id() == id) else { return };
+        let Some(from) = self.tabs.iter().position(|t| t.id() == id) else {
+            return;
+        };
         let t = self.tabs.remove(from);
         self.tabs.insert(to.min(self.tabs.len()), t);
         self.dirty = true;
@@ -440,7 +454,9 @@ impl App {
     }
 
     pub fn close(&mut self, id: u64) {
-        let Some(i) = self.tabs.iter().position(|t| t.id() == id) else { return };
+        let Some(i) = self.tabs.iter().position(|t| t.id() == id) else {
+            return;
+        };
         self.tabs.remove(i);
         if self.mixer.owner() == Some(id) {
             self.mixer.unload();
@@ -554,9 +570,12 @@ impl App {
     pub fn score(&mut self, value: i64) {
         let Some(t) = self.current() else { return };
         let member = t.active;
-        let Some(id) = t.spec.items.get(member).cloned() else { return };
+        let Some(id) = t.spec.items.get(member).cloned() else {
+            return;
+        };
         let note = t.note.text.trim().to_owned();
-        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "score".into(), items: vec![id.clone()], value: Value::from(value), note, blind: t.spec.blind, reveal_map: None };
+        let row =
+            Row { ts: feedback::now(), tab_id: t.id(), kind: "score".into(), items: vec![id.clone()], value: Value::from(value), note, blind: t.spec.blind, reveal_map: None };
         if self.write(row) {
             self.scores.insert(id, value);
             if let Some(t) = self.current_mut() {
@@ -577,7 +596,16 @@ impl App {
             let map: serde_json::Map<String, Value> = t.spec.items.iter().enumerate().map(|(m, id)| (t.member_label(m), Value::String(id.clone()))).collect();
             Value::Object(map)
         });
-        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "pick".into(), items: t.spec.items.clone(), value: Value::String(picked), note: t.note.text.trim().to_owned(), blind: t.spec.blind, reveal_map: reveal };
+        let row = Row {
+            ts: feedback::now(),
+            tab_id: t.id(),
+            kind: "pick".into(),
+            items: t.spec.items.clone(),
+            value: Value::String(picked),
+            note: t.note.text.trim().to_owned(),
+            blind: t.spec.blind,
+            reveal_map: reveal,
+        };
         if self.write(row)
             && let Some(t) = self.current_mut()
         {
@@ -763,7 +791,9 @@ impl App {
                 }
             }
             Event::Analysed { id, result } => {
-                let Some(entry) = self.items.get_mut(&id) else { return };
+                let Some(entry) = self.items.get_mut(&id) else {
+                    return;
+                };
                 entry.analysing = false;
                 match result {
                     Ok((a, spec)) => {
@@ -800,7 +830,9 @@ impl App {
                 }
             },
             Event::Earshot { id, cmd, result } => {
-                let Some(entry) = self.items.get_mut(&id) else { return };
+                let Some(entry) = self.items.get_mut(&id) else {
+                    return;
+                };
                 entry.earshot_busy.remove(cmd.name());
                 match result {
                     Ok(v) => {
@@ -810,7 +842,9 @@ impl App {
                 }
             }
             Event::Sheet { id, result } => {
-                let Some(entry) = self.items.get_mut(&id) else { return };
+                let Some(entry) = self.items.get_mut(&id) else {
+                    return;
+                };
                 entry.earshot_busy.remove("sheet");
                 match result.and_then(|p| derive::read_png(&p).ok_or_else(|| "The sheet PNG didn't decode.".to_owned())) {
                     Ok((w, h, rgba)) => {
@@ -902,8 +936,12 @@ impl App {
     }
 
     fn restore(&mut self) {
-        let Ok(bytes) = std::fs::read(App::session_path()) else { return };
-        let Ok(v) = serde_json::from_slice::<Value>(&bytes) else { return };
+        let Ok(bytes) = std::fs::read(App::session_path()) else {
+            return;
+        };
+        let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+            return;
+        };
         let specs: Vec<TabSpec> = serde_json::from_value(v["tabs"].clone()).unwrap_or_default();
         self.next_tab = v["next_tab"].as_u64().unwrap_or(1).max(specs.iter().map(|s| s.id + 1).max().unwrap_or(1));
         // A headless shot of one tab loads only that tab.
@@ -1094,7 +1132,9 @@ impl App {
     }
 
     pub fn tab_json(&self, id: u64) -> Value {
-        let Some(t) = self.tab(id) else { return Value::Null };
+        let Some(t) = self.tab(id) else {
+            return Value::Null;
+        };
         let members: Vec<Value> = t
             .spec
             .items
@@ -1195,7 +1235,19 @@ mod tests {
 
     #[test]
     fn blind_labels_are_letters_in_shown_order() {
-        let spec = TabSpec { id: 1, kind: TabKind::Compare, items: vec!["a".into(), "b".into(), "c".into()], label: None, blind: true, loudness_match: true, note: None, run: None, filter: None, order: vec![2, 0, 1], revealed: false };
+        let spec = TabSpec {
+            id: 1,
+            kind: TabKind::Compare,
+            items: vec!["a".into(), "b".into(), "c".into()],
+            label: None,
+            blind: true,
+            loudness_match: true,
+            note: None,
+            run: None,
+            filter: None,
+            order: vec![2, 0, 1],
+            revealed: false,
+        };
         let t = Tab::new(spec);
         assert_eq!(t.member_label(2), "X");
         assert_eq!(t.member_label(0), "Y");

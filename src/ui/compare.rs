@@ -18,29 +18,17 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let hidden = t.is_blind_hidden();
     let strip_w = width - LABEL_W - 12.0;
 
-    let blind = Switch::new(t.spec.blind)
-        .label("Blind")
-        .disabled(t.spec.revealed)
-        .on_toggle(|s: &mut App| s.toggle_blind())
-        .build(k)
-        .key("blind");
-    let lm = Switch::new(t.spec.loudness_match)
-        .label("Match loudness")
-        .on_toggle(|s: &mut App| s.toggle_loudness_match())
-        .build(k)
-        .key("match");
+    let blind = Switch::new(t.spec.blind).label("Blind").disabled(t.spec.revealed).on_toggle(|s: &mut App| s.toggle_blind()).build(k).key("blind");
+    let lm = Switch::new(t.spec.loudness_match).label("Match loudness").on_toggle(|s: &mut App| s.toggle_loudness_match()).build(k).key("match");
     let pick_label = format!("Pick {}", t.member_label(t.active));
-    let pick = Button::new(pick_label).variant(ButtonVariant::Contrast).control_size(ControlSize::Small).help("The one you're hearing is better · Enter").on_press(|s: &mut App| s.pick()).build(k).key("pick");
-    let head = row()
-        .key("compare-head")
-        .w_full()
-        .gap(16.0)
-        .center_y()
-        .child(widgets::transport(s, t, k))
-        .child(spacer())
-        .child(blind)
-        .child(lm)
-        .child(pick);
+    let pick = Button::new(pick_label)
+        .variant(ButtonVariant::Contrast)
+        .control_size(ControlSize::Small)
+        .help("The one you're hearing is better · Enter")
+        .on_press(|s: &mut App| s.pick())
+        .build(k)
+        .key("pick");
+    let head = row().key("compare-head").w_full().gap(16.0).center_y().child(widgets::transport(s, t, k)).child(spacer()).child(blind).child(lm).child(pick);
 
     let mut page = col().key("compare").w_full().h_full().min_h(0.0).gap(10.0).child(head);
     if let Some(a) = widgets::annotation(t, k) {
@@ -112,7 +100,13 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
 
     // The spectrogram of the one you hear.
     let active_id = t.spec.items.get(t.active).cloned().unwrap_or_default();
-    page = page.child(row().w_full().gap(12.0).child(col().w(LABEL_W).child(widgets::section_title(&format!("Spectrogram · {}", t.member_label(t.active)), k))).child(col().grow(1.0).min_w(0.0).child(widgets::spec_strip(s, t, s.entry(&active_id), "spec", strip_w, 110.0, total, k))));
+    page = page.child(
+        row()
+            .w_full()
+            .gap(12.0)
+            .child(col().w(LABEL_W).child(widgets::section_title(&format!("Spectrogram · {}", t.member_label(t.active)), k)))
+            .child(col().grow(1.0).min_w(0.0).child(widgets::spec_strip(s, t, s.entry(&active_id), "spec", strip_w, 110.0, total, k))),
+    );
 
     // What differs between them, hidden while blind.
     let lower = if hidden {
@@ -140,15 +134,30 @@ fn diff_table(s: &App, t: &Tab, k: &Kit) -> El {
     }
     let mut list = col().key("diff-rows").w_full();
     for (i, key) in keys.iter().enumerate() {
-        let mut r = row().key(format!("diff-{i}")).w_full().px(8.0).py(4.0).gap(12.0).fill(if i % 2 == 1 { c.layer_01 } else { Color::TRANSPARENT }).child(text(key.clone()).font(k.ty.small).color(c.text_muted).w(180.0).truncate().help_when_truncated(key.clone()));
+        let mut r = row()
+            .key(format!("diff-{i}"))
+            .w_full()
+            .px(8.0)
+            .py(4.0)
+            .gap(12.0)
+            .fill(if i % 2 == 1 { c.layer_01 } else { Color::TRANSPARENT })
+            .child(text(key.clone()).font(k.ty.small).color(c.text_muted).w(180.0).truncate().help_when_truncated(key.clone()));
         for (m, e) in entries.iter().enumerate() {
             let v = e.and_then(|e| e.get(key)).unwrap_or("–").to_owned();
-            r = r.child(text(v).font(k.ty.small.features("'tnum' 1")).color(if m == t.active { c.text_base } else { c.text_muted }).wrap().w(0.0).grow(1.0).min_w(0.0).selectable(true));
+            r = r.child(
+                text(v).font(k.ty.small.features("'tnum' 1")).color(if m == t.active { c.text_base } else { c.text_muted }).wrap().w(0.0).grow(1.0).min_w(0.0).selectable(true),
+            );
         }
         list = list.child(r);
     }
     if keys.is_empty() {
-        list = list.child(text(if present.len() < t.spec.items.len() { "Loading metadata…" } else { "Their metadata is identical (or there is none)." }).font(k.ty.small).color(c.text_faint).px(8.0).py(6.0));
+        list = list.child(
+            text(if present.len() < t.spec.items.len() { "Loading metadata…" } else { "Their metadata is identical (or there is none)." })
+                .font(k.ty.small)
+                .color(c.text_faint)
+                .px(8.0)
+                .py(6.0),
+        );
     }
     col().key("diff").w_full().grow(1.0).min_h(0.0).gap(2.0).child(head).child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
 }

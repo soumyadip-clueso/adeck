@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use crate::app::{App, TabKind};
 
-pub const ALL: &[(&str, fn(&mut App))] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run)];
+type Scene = (&'static str, fn(&mut App));
+
+pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run)];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -33,7 +35,8 @@ pub fn fixtures() -> PathBuf {
         click + (t * 110.0 * std::f32::consts::TAU).sin() * 0.15
     });
     let meta = |name: &str, model: &str, mood: &str, seed: u32, extra: serde_json::Value| {
-        let mut v = serde_json::json!({"id": name, "model": model, "mood": mood, "seed": seed, "prompt": format!("{mood} test sound, fixture"), "steps": 8, "cfg": 1.0, "flags": []});
+        let mut v =
+            serde_json::json!({"id": name, "model": model, "mood": mood, "seed": seed, "prompt": format!("{mood} test sound, fixture"), "steps": 8, "cfg": 1.0, "flags": []});
         if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
             o.extend(e.clone());
         }

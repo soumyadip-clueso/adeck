@@ -91,15 +91,17 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
         .column(TableColumn::new("flags", "Flags").flex(1.0).min(100.0).sortable())
         .column(TableColumn::new("score", "Score").width(60.0).align(rune::Align::End).sortable())
         .cell(|s: &App, i, col| {
-            let Some(e) = s.current().and_then(|t| t.rows.get(i)).and_then(|id| s.entry(id)) else { return Cell::text("") };
+            let Some(e) = s.current().and_then(|t| t.rows.get(i)).and_then(|id| s.entry(id)) else {
+                return Cell::text("");
+            };
             let v = cell_value(s, e, col);
-            let cell = match col {
+
+            match col {
                 "name" if e.item.is_ref => Cell::text(format!("{v}  [REF]")),
                 "secs" | "bpm" | "lufs" | "score" => Cell::text(v).mono(),
                 "flags" if !v.is_empty() => Cell::text(v).color(rune::oklch(0.72, 0.16, 50.0)),
                 _ => Cell::text(v),
-            };
-            cell
+            }
         })
         .on_sort(|s: &mut App, col: &str, dir, _tx: &mut Tx| {
             if let Some(t) = s.current_mut() {

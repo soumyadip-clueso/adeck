@@ -6,7 +6,6 @@
 //! feedback signal, `screenshot_tab` renders the tab in a headless copy of adeck, and `analyze`
 //! runs earshot.
 
-use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -143,13 +142,17 @@ fn rpc(m: &Value, ctx: &Ctx) -> Option<Value> {
     };
     Some(match result {
         Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-        Err((code, msg)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}}),
+        Err((code, msg)) => {
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}})
+        }
     })
 }
 
 fn text_result(v: Result<Value, String>) -> Value {
     match v {
-        Ok(v) => json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}], "structuredContent": if v.is_object() { v.clone() } else { json!({"result": v}) }}),
+        Ok(v) => {
+            json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}], "structuredContent": if v.is_object() { v.clone() } else { json!({"result": v}) }})
+        }
         Err(e) => json!({"content": [{"type": "text", "text": e}], "isError": true}),
     }
 }
@@ -158,7 +161,9 @@ fn call_tool(name: &str, args: &Value, ctx: &Ctx) -> Value {
     match name {
         "wait_for_feedback" => text_result(wait_for_feedback(args, ctx)),
         "screenshot_tab" => match screenshot(args, ctx) {
-            Ok(png) => json!({"content": [{"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(png), "mimeType": "image/png"}]}),
+            Ok(png) => {
+                json!({"content": [{"type": "image", "data": base64::engine::general_purpose::STANDARD.encode(png), "mimeType": "image/png"}]})
+            }
             Err(e) => text_result(Err(e)),
         },
         "analyze" => text_result(analyze(args, ctx)),
@@ -235,24 +240,89 @@ pub fn tools() -> Vec<Value> {
     let tab = json!({"type": "integer", "description": "A tab id from an open_* call or list_tabs."});
     let note = json!({"type": "string", "description": "Markdown pinned in the tab: what to listen for."});
     vec![
-        tool("list_runs", "Runs adeck knows: folders of generated audio under the configured run roots, the local-only reference pack (`refs`), and S3 runs when include_s3 is true.", json!({"include_s3": {"type": "boolean"}}), &[]),
-        tool("list_items", "A run's items: id, name, a one-line summary (model, mood or type) and the user's latest score.", json!({"run": {"type": "string"}, "filter": {"type": "string", "description": "Case-insensitive match on name or any metadata value."}}), &["run"]),
-        tool("get_item", "Everything about one item: flattened metadata (prompt, model, seed, flags…), native analysis (duration, LUFS, peak, BPM, key), cached earshot summaries and the latest score.", json!({"id": {"type": "string"}}), &["id"]),
-        tool("open_single", "Open one file in a tab: waveform with beat grid, spectrogram, all metadata and earshot numbers. The user can score it 0-3.", json!({"item": {"type": "string"}, "label": {"type": "string"}, "note": note}), &["item"]),
-        tool("open_compare", "Open 2-9 files side by side. They play in sync; keys 1-9 switch instantly at the same moment. Loudness-matched by default. Blind mode shuffles them as X/Y/Z and reveals after the user picks.", json!({"items": items, "blind": {"type": "boolean"}, "loudness_match": {"type": "boolean"}, "label": {"type": "string"}, "note": note}), &["items"]),
-        tool("open_render", "Open one or more videos (renders): picture, earshot critique scorecard and sheet. Several renders switch like a compare.", json!({"items": items, "label": {"type": "string"}, "note": note}), &["items"]),
-        tool("open_run", "Open a whole run as a sortable, filterable table. The user opens rows or compares a selection.", json!({"run": {"type": "string"}, "filter": {"type": "string"}, "label": {"type": "string"}}), &["run"]),
+        tool(
+            "list_runs",
+            "Runs adeck knows: folders of generated audio under the configured run roots, the local-only reference pack (`refs`), and S3 runs when include_s3 is true.",
+            json!({"include_s3": {"type": "boolean"}}),
+            &[],
+        ),
+        tool(
+            "list_items",
+            "A run's items: id, name, a one-line summary (model, mood or type) and the user's latest score.",
+            json!({"run": {"type": "string"}, "filter": {"type": "string", "description": "Case-insensitive match on name or any metadata value."}}),
+            &["run"],
+        ),
+        tool(
+            "get_item",
+            "Everything about one item: flattened metadata (prompt, model, seed, flags…), native analysis (duration, LUFS, peak, BPM, key), cached earshot summaries and the latest score.",
+            json!({"id": {"type": "string"}}),
+            &["id"],
+        ),
+        tool(
+            "open_single",
+            "Open one file in a tab: waveform with beat grid, spectrogram, all metadata and earshot numbers. The user can score it 0-3.",
+            json!({"item": {"type": "string"}, "label": {"type": "string"}, "note": note}),
+            &["item"],
+        ),
+        tool(
+            "open_compare",
+            "Open 2-9 files side by side. They play in sync; keys 1-9 switch instantly at the same moment. Loudness-matched by default. Blind mode shuffles them as X/Y/Z and reveals after the user picks.",
+            json!({"items": items, "blind": {"type": "boolean"}, "loudness_match": {"type": "boolean"}, "label": {"type": "string"}, "note": note}),
+            &["items"],
+        ),
+        tool(
+            "open_render",
+            "Open one or more videos (renders): picture, earshot critique scorecard and sheet. Several renders switch like a compare.",
+            json!({"items": items, "label": {"type": "string"}, "note": note}),
+            &["items"],
+        ),
+        tool(
+            "open_run",
+            "Open a whole run as a sortable, filterable table. The user opens rows or compares a selection.",
+            json!({"run": {"type": "string"}, "filter": {"type": "string"}, "label": {"type": "string"}}),
+            &["run"],
+        ),
         tool("list_tabs", "Open tabs and which is in front.", json!({}), &[]),
         tool("focus_tab", "Bring a tab to the front.", json!({"tab_id": tab}), &["tab_id"]),
         tool("close_tab", "Close a tab.", json!({"tab_id": tab}), &["tab_id"]),
-        tool("annotate_tab", "Pin markdown in a tab (what to listen for, what changed). Empty clears it.", json!({"tab_id": tab, "markdown": {"type": "string"}}), &["tab_id", "markdown"]),
-        tool("play", "Play a tab (the front one by default), optionally a member and a start time.", json!({"tab_id": tab, "member": {"type": "integer"}, "at_s": {"type": "number"}}), &[]),
+        tool(
+            "annotate_tab",
+            "Pin markdown in a tab (what to listen for, what changed). Empty clears it.",
+            json!({"tab_id": tab, "markdown": {"type": "string"}}),
+            &["tab_id", "markdown"],
+        ),
+        tool(
+            "play",
+            "Play a tab (the front one by default), optionally a member and a start time.",
+            json!({"tab_id": tab, "member": {"type": "integer"}, "at_s": {"type": "number"}}),
+            &[],
+        ),
         tool("stop", "Pause playback.", json!({}), &[]),
         tool("set_loop", "Loop a region of a tab. Omit start_s/end_s to clear.", json!({"tab_id": tab, "start_s": {"type": "number"}, "end_s": {"type": "number"}}), &[]),
-        tool("screenshot_tab", "A PNG of a tab as the user sees it.", json!({"tab_id": tab, "size": {"type": "string", "description": "WxH in points, default 1280x800."}, "theme": {"type": "string", "enum": ["dark", "light"]}}), &[]),
-        tool("get_feedback", "The user's verdicts: scores, picks (with the blind reveal), ranks and notes. Filter by tab, run or items; since is unix seconds.", json!({"tab_id": tab, "run": {"type": "string"}, "items": items, "since": {"type": "number"}}), &[]),
-        tool("wait_for_feedback", "Block until the user scores, picks or notes something (in this tab, if given), then return the new rows. Use it to loop: open, wait, read, generate, open again.", json!({"tab_id": tab, "timeout_s": {"type": "number", "description": "Default 300."}}), &[]),
-        tool("analyze", "Run earshot on an item (cached): describe (tags, labels), measure (loudness, peaks, spectrum), critique (scorecard vs pro films, for renders) or timeline. Returns a summary unless full is true.", json!({"item": {"type": "string"}, "kind": {"type": "string", "enum": ["describe", "measure", "critique", "timeline"]}, "full": {"type": "boolean"}}), &["item"]),
+        tool(
+            "screenshot_tab",
+            "A PNG of a tab as the user sees it.",
+            json!({"tab_id": tab, "size": {"type": "string", "description": "WxH in points, default 1280x800."}, "theme": {"type": "string", "enum": ["dark", "light"]}}),
+            &[],
+        ),
+        tool(
+            "get_feedback",
+            "The user's verdicts: scores, picks (with the blind reveal), ranks and notes. Filter by tab, run or items; since is unix seconds.",
+            json!({"tab_id": tab, "run": {"type": "string"}, "items": items, "since": {"type": "number"}}),
+            &[],
+        ),
+        tool(
+            "wait_for_feedback",
+            "Block until the user scores, picks or notes something (in this tab, if given), then return the new rows. Use it to loop: open, wait, read, generate, open again.",
+            json!({"tab_id": tab, "timeout_s": {"type": "number", "description": "Default 300."}}),
+            &[],
+        ),
+        tool(
+            "analyze",
+            "Run earshot on an item (cached): describe (tags, labels), measure (loudness, peaks, spectrum), critique (scorecard vs pro films, for renders) or timeline. Returns a summary unless full is true.",
+            json!({"item": {"type": "string"}, "kind": {"type": "string", "enum": ["describe", "measure", "critique", "timeline"]}, "full": {"type": "boolean"}}),
+            &["item"],
+        ),
     ]
 }
 

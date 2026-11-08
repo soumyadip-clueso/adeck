@@ -19,6 +19,10 @@ use crate::decode::{self, Pcm};
 /// Crossfade length on a switch, in seconds.
 const XFADE: f32 = 0.005;
 
+type Paths = Vec<(String, std::path::PathBuf)>;
+type Decoded = Result<(Vec<Arc<Vec<f32>>>, u64), String>;
+type Opened = Result<(Sender<Cmd>, u32), String>;
+
 enum Cmd {
     Load { set: u64, tracks: Vec<Arc<Vec<f32>>> },
     Play,
@@ -42,7 +46,7 @@ pub struct Mixer {
     tx: Option<Sender<Cmd>>,
     shared: Arc<Shared>,
     pub rate: u32,
-    opening: Option<Receiver<Result<(Sender<Cmd>, u32), String>>>,
+    opening: Option<Receiver<Opened>>,
     /// Commands sent before the device opened, replayed once it has.
     queued: Vec<Cmd>,
     pub error: Option<String>,
@@ -51,13 +55,13 @@ pub struct Mixer {
     pub frames: u64,
     next_set: u64,
     /// Decodes in flight: (set, result).
-    decoding: Option<(u64, Receiver<Result<(Vec<Arc<Vec<f32>>>, u64), String>>)>,
+    decoding: Option<(u64, Receiver<Decoded>)>,
     pub active: usize,
     pub loop_frames: Option<(u64, u64)>,
     want_play: bool,
     waker: Option<rune::Waker>,
     /// A load waiting for the device to open.
-    pending: Option<(u64, Vec<(String, std::path::PathBuf)>)>,
+    pending: Option<(u64, Paths)>,
 }
 
 impl Default for Mixer {
@@ -344,9 +348,20 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
     let rate = config.sample_rate();
     let channels = config.channels() as usize;
     let (tx, rx) = channel::<Cmd>();
-    let st = Mutex::new(State { tracks: Vec::new(), gains: Vec::new(), trims: Vec::new(), active: 0, pos: 0, len: 0, playing: false, looping: None, step: 1.0 / (XFADE * rate as f32), master: 0.0 });
+    let st = Mutex::new(State {
+        tracks: Vec::new(),
+        gains: Vec::new(),
+        trims: Vec::new(),
+        active: 0,
+        pos: 0,
+        len: 0,
+        playing: false,
+        looping: None,
+        step: 1.0 / (XFADE * rate as f32),
+        master: 0.0,
+    });
     let sh = shared.clone();
-    let mut fill = move |out: &mut [f32]| {
+    let fill = move |out: &mut [f32]| {
         let Ok(mut s) = st.lock() else {
             out.fill(0.0);
             return;
@@ -424,10 +439,12 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
         sh.pos.store(s.pos, Ordering::Release);
     };
     let err = |e: cpal::Error| eprintln!("adeck: audio stream error: {e}");
-    let cfg: cpal::StreamConfig = config.clone().into();
+    let cfg: cpal::StreamConfig = config.into();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(cfg, move |out: &mut [f32], _| fill(out), err, None),
-        other => return Err(format!("the output wants {other:?} samples; only f32 is supported")),
+        other => {
+            return Err(format!("the output wants {other:?} samples; only f32 is supported"));
+        }
     }
     .map_err(|e| e.to_string())?;
     stream.play().map_err(|e| e.to_string())?;

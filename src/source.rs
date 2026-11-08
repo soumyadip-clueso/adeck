@@ -134,7 +134,9 @@ fn walk_runs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Run>) {
     if depth > 4 {
         return;
     }
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut direct = 0;
     let mut subdirs = Vec::new();
     for e in rd.flatten() {
@@ -163,7 +165,9 @@ pub fn media_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -278,7 +282,9 @@ fn list_s3_items(cfg: &Config, name: &str) -> Result<Vec<Item>, String> {
     let key_prefix = base.trim_start_matches("s3://").split_once('/').map_or("", |(_, k)| k).to_owned();
     let mut items = Vec::new();
     for line in listing.lines() {
-        let Some(key) = line.split_whitespace().nth(3) else { continue };
+        let Some(key) = line.split_whitespace().nth(3) else {
+            continue;
+        };
         let rel = key.strip_prefix(&key_prefix).unwrap_or(key);
         let local = dir.join(rel);
         if media_of(&local).is_none() {

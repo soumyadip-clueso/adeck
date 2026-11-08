@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Live editing: Rune's own launcher (subsecond through Dioxus CLI 0.7.10), found in the Rune
+# checkout Cargo pinned, so it always matches the Rune this app builds against.
+#   scripts/rune-hot [-- APP ARGS]
+# Edits to function bodies in src/ui/ and src/app.rs patch into the open window in about a
+# second; anything else rebuilds and relaunches, and adeck restores its tabs.
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+dx=${RUNE_DX:-$HOME/.cargo/bin/dx}
+if ! "$dx" --version 2>/dev/null | grep -q '0\.7\.10'; then
+  echo "rune-hot: needs Dioxus CLI 0.7.10 at $dx (not Homebrew's dx):" >&2
+  echo "  cargo install dioxus-cli@0.7.10 --locked" >&2
+  exit 2
+fi
+rune_manifest=$(cargo metadata --manifest-path "$here/Cargo.toml" --format-version 1 \
+  | python3 -c 'import json,sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "rune"))')
+rune_root=$(cd "$(dirname "$rune_manifest")/../.." && pwd)
+cd "$here"
+exec "$rune_root/scripts/rune-hot" --manifest "$here/Cargo.toml" --patch 'src/ui/*.rs' --patch 'src/ui/**/*.rs' --patch 'src/app.rs' "$@"

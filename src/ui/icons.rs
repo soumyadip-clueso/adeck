@@ -28,12 +28,6 @@ pub static DROP: Icon = Icon {
     body: r#"<path d="M8 2.5V9.5M5.25 6.75L8 9.5L10.75 6.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2.75 9.75V11.75C2.75 12.3 3.2 12.75 3.75 12.75H12.25C12.8 12.75 13.25 12.3 13.25 11.75V9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
 
-pub static PLUS: Icon = Icon {
-    name: "adeck-plus",
-    view: 16.0,
-    body: r#"<path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#,
-};
-
 pub static SPARK: Icon = Icon {
     name: "adeck-spark",
     view: 16.0,

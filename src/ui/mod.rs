@@ -99,7 +99,9 @@ pub fn tab_title(s: &App, t: &crate::app::Tab) -> String {
     match t.spec.kind {
         TabKind::Run => t.spec.run.clone().unwrap_or_else(|| "Run".into()),
         _ if t.is_blind_hidden() => format!("Blind ×{}", t.spec.items.len()),
-        TabKind::Compare | TabKind::Render if t.spec.items.len() > 1 => format!("{} ×{}", short(s, &t.spec.items[0]), t.spec.items.len()),
+        TabKind::Compare | TabKind::Render if t.spec.items.len() > 1 => {
+            format!("{} ×{}", short(s, &t.spec.items[0]), t.spec.items.len())
+        }
         _ => t.spec.items.first().map_or_else(|| "Empty".into(), |i| short(s, i)),
     }
 }
