@@ -65,12 +65,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(a) = statusbar::activity(s, k) {
         root = root.child(a);
     }
-    if !s.jobs.list().is_empty() {
+    if statusbar::visible(s) {
         root = root.child(statusbar::build(s, full_w, k));
     }
     if let Some(t) = s.current().filter(|t| player::has_player(t)) {
         root = root.child(player::build(s, t, full_w, k));
     }
+    s.toast_shown();
     if let Some((msg, err)) = &s.toast {
         // Above the player; click it or its × to dismiss (it also clears itself after a few seconds).
         let t = Toast::new("toast", msg.clone())

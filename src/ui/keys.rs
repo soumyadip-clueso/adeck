@@ -31,6 +31,7 @@ const PLAY: Section = (
         ("= −", "Zoom in or out"),
         ("F", "Fit the file or loop"),
         ("[ ]", "Pan"),
+        ("⇧ drag", "Play just that stretch"),
         ("Esc", "Clear the loop"),
         ("S", "Send to agent"),
     ],

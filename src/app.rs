@@ -309,6 +309,9 @@ pub enum Event {
     Live { result: Result<Vec<String>, String> },
 }
 
+/// How long a finished job stays in the footer (it stays in Activity until cleared).
+pub const FOOTER_SECS: f64 = 6.0;
+
 pub struct App {
     pub cfg: Config,
     pub tabs: Vec<Tab>,
@@ -336,7 +339,13 @@ pub struct App {
     /// A message along the bottom: (text, is_error).
     pub toast: Option<(String, bool)>,
     /// The toast on screen and when it went up, to clear it after a few seconds.
-    toast_seen: Option<(String, std::time::Instant)>,
+    /// The toast on screen and when it first showed. Set while drawing, so a toast raised
+    /// anywhere (a click, a job, the agent) starts its clock the moment you can see it.
+    toast_seen: std::cell::RefCell<Option<(String, std::time::Instant)>>,
+    /// The poll clock, so the footer knows how long ago a job finished.
+    pub clock: f64,
+    /// How many finished jobs were still in the footer at the last poll.
+    fresh_jobs: usize,
     pub mcp_status: String,
     /// The new-tab menu, and the runs it offers (listed when it opens).
     pub new_menu: bool,
@@ -407,7 +416,9 @@ impl App {
             activity_open: false,
             log_open: None,
             toast: cfg_error.map(|e| (e, true)),
-            toast_seen: None,
+            toast_seen: std::cell::RefCell::new(None),
+            clock: 0.0,
+            fresh_jobs: 0,
             new_menu: false,
             menu_runs: Vec::new(),
             sheet_w: 360.0,
@@ -1473,6 +1484,51 @@ impl App {
     /// goes back to how it was when the drag ends.
     /// Dragging moves the playhead silently: playback pauses on press and picks up from where you
     /// let go, only if it was playing.
+    fn toast_life(err: bool) -> std::time::Duration {
+        std::time::Duration::from_secs(if err { 8 } else { 4 })
+    }
+
+    /// Called while drawing a toast: the first time this one shows, start its clock and ask
+    /// for a wake when it's due, so it goes on time even if nothing else happens.
+    pub fn toast_shown(&self) {
+        let mut seen = self.toast_seen.borrow_mut();
+        let Some((msg, err)) = &self.toast else {
+            // Gone (timed out or closed): the next toast, even the same words, starts afresh.
+            *seen = None;
+            return;
+        };
+        if seen.as_ref().is_some_and(|(m, _)| m == msg) {
+            return;
+        }
+        *seen = Some((msg.clone(), std::time::Instant::now()));
+        if let Some(w) = self.waker.clone() {
+            let life = Self::toast_life(*err) + std::time::Duration::from_millis(30);
+            std::thread::spawn(move || {
+                std::thread::sleep(life);
+                w();
+            });
+        }
+    }
+
+    /// Shift-drag on a strip: the stretch shows as the loop while you drag; let go and only
+    /// that stretch plays, round and round, from its start. A shift-click with no stretch
+    /// clears it.
+    pub fn select_stretch(&mut self, from: f64, at: f64, phase: rune::Phase) {
+        let (a, b) = (from.min(at).max(0.0), from.max(at));
+        let real = b - a >= 0.01;
+        match phase {
+            rune::Phase::Up if !real => self.set_loop(None),
+            rune::Phase::Up => {
+                self.set_loop(Some((a, b)));
+                self.seek_secs(a);
+                self.sync_mixer();
+                self.mixer.play();
+            }
+            _ if real => self.set_loop(Some((a, b))),
+            _ => {}
+        }
+    }
+
     pub fn scrub(&mut self, at: f64, phase: rune::Phase) {
         let playing = self.current().is_some_and(|t| self.mixer_is_for(t.id())) && self.mixer.is_playing();
         match phase {
@@ -1762,19 +1818,47 @@ impl App {
         {
             tx.wake_after(wait);
         }
-        if let Some((msg, err)) = &self.toast {
-            if self.toast_seen.as_ref().is_none_or(|(m, _)| m != msg) {
-                self.toast_seen = Some((msg.clone(), std::time::Instant::now()));
+        if let Some((_, err)) = &self.toast {
+            let life = Self::toast_life(*err);
+            let up = self.toast_seen.borrow().as_ref().map(|(_, at)| at.elapsed());
+            match up {
+                Some(up) if up >= life => {
+                    self.toast = None;
+                    *self.toast_seen.borrow_mut() = None;
+                    changed = true;
+                }
+                Some(up) => tx.wake_after(life - up),
+                None => {}
             }
-            let life = std::time::Duration::from_secs(if *err { 8 } else { 4 });
-            let up = self.toast_seen.as_ref().map_or(life, |(_, at)| at.elapsed());
-            if up >= life {
-                self.toast = None;
-                self.toast_seen = None;
-                changed = true;
-            } else {
-                tx.wake_after(life - up);
-            }
+        }
+        // Finished jobs leave the footer after a few seconds; come back to fold the next one,
+        // and redraw when one goes.
+        self.clock = clock;
+        let fresh = self
+            .jobs
+            .list()
+            .iter()
+            .filter(
+                |j| matches!(j.phase, crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_) | crate::jobs::Outcome::Stopped(_), at } if at + FOOTER_SECS > clock),
+            )
+            .count();
+        if fresh != self.fresh_jobs {
+            self.fresh_jobs = fresh;
+            changed = true;
+        }
+        if let Some(next) = self
+            .jobs
+            .list()
+            .iter()
+            .filter_map(|j| match j.phase {
+                crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_) | crate::jobs::Outcome::Stopped(_), at } if at + FOOTER_SECS > clock => {
+                    Some(at + FOOTER_SECS - clock)
+                }
+                _ => None,
+            })
+            .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.min(x))))
+        {
+            tx.wake_after(std::time::Duration::from_secs_f64(next.max(0.05)));
         }
         if self.dirty {
             self.dirty = false;

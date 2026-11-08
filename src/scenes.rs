@@ -735,6 +735,71 @@ mod tests {
         assert!(rt.state.palette.is_some(), "⌘F on a page with no search should open the palette");
     }
 
+    /// Shift-drag across a waveform plays just that stretch (as the loop, from its start);
+    /// shift-click clears it; a plain drag still only scrubs.
+    #[test]
+    fn shift_drag_on_a_waveform_plays_just_that_stretch() {
+        let shift = |rt: &mut Runtime<App>, on: bool| {
+            rt.physical_input(rune::PhysicalInput::Modifiers(rune::Mods { shift: on, ..Default::default() }));
+            rt.frame(0.0);
+        };
+        let mut rt = rt(single);
+        let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("wave")).expect("wave").target;
+        let (y, x0, x1) = (r[1] + r[3] / 2.0, r[0] + r[2] * 0.25, r[0] + r[2] * 0.5);
+        let total = rt.state.window(rt.state.current().unwrap());
+
+        // A plain drag scrubs and sets no loop.
+        rt.pointer_down(x0, y);
+        rt.pointer_move(x1, y);
+        rt.pointer_up(x1, y);
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.current().unwrap().loop_secs.is_none(), "a plain drag made a loop");
+
+        shift(&mut rt, true);
+        rt.pointer_down(x0, y);
+        rt.pointer_move((x0 + x1) / 2.0, y);
+        rt.pointer_move(x1, y);
+        rt.pointer_up(x1, y);
+        rt.frame(1.0 / 60.0);
+        let (a, b) = rt.state.current().unwrap().loop_secs.expect("shift-drag made no loop");
+        let span = total.1 - total.0;
+        assert!((a - (total.0 + span * 0.25)).abs() < span * 0.02 && (b - (total.0 + span * 0.5)).abs() < span * 0.02, "loop {a}..{b} of {total:?}");
+        assert!(rt.state.mixer.wants_play() || rt.state.mixer.is_playing(), "the stretch didn't start playing");
+        assert!((rt.state.mixer.secs() - a).abs() < span * 0.02, "it didn't start at the stretch");
+
+        // Shift-click with no drag clears it.
+        rt.pointer_down(x1, y);
+        rt.pointer_up(x1, y);
+        rt.frame(1.0 / 60.0);
+        shift(&mut rt, false);
+        assert!(rt.state.current().unwrap().loop_secs.is_none(), "shift-click didn't clear the stretch");
+    }
+
+    /// A finished job leaves the footer after a few seconds (failures stay); the footer goes
+    /// once there's nothing left in it.
+    #[test]
+    fn finished_jobs_fold_out_of_the_footer() {
+        use crate::jobs::{JobKind, Outcome, Phase};
+        let mut rt = rt(single);
+        rt.poll = Some(|s: &mut App, clock: f64, tx: &mut rune::Tx| s.poll(clock, tx));
+        rt.frame(1.0 / 60.0);
+        let now = rt.state.clock;
+        rt.state.jobs.stage(JobKind::Earshot, "earshot describe · a", "", 1, Some(1), Phase::Done { outcome: Outcome::Completed("earshot describe · a".into()), at: now });
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("statusbar").is_some(), "a just-finished job shows");
+        for _ in 0..8 {
+            rt.frame(1.0);
+        }
+        assert!(rt.find("statusbar").is_none(), "the footer should fold away once its jobs are old");
+        rt.state.jobs.stage(JobKind::Fetch, "Downloading b", "", 0, None, Phase::Done { outcome: Outcome::Failed("no network".into()), at: rt.state.clock });
+        rt.invalidate();
+        for _ in 0..8 {
+            rt.frame(1.0);
+        }
+        assert!(rt.find("statusbar").is_some(), "a failure stays until dismissed");
+    }
+
     #[test]
     fn space_plays_whatever_was_clicked_last() {
         let space = || rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() };

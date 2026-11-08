@@ -22,8 +22,22 @@ const SUMMARY_W: f32 = 230.0;
 /// The "+N more" button's width.
 const MORE_W: f32 = 76.0;
 
+/// Whether a job still has a chip in the footer: while it runs, if it failed, and for a few
+/// seconds after it finishes. Activity keeps every job until you clear it.
+fn in_footer(s: &App, j: &Job) -> bool {
+    match &j.phase {
+        Phase::Done { outcome: Outcome::Completed(_) | Outcome::Stopped(_), at } => s.clock - at < crate::app::FOOTER_SECS,
+        _ => true,
+    }
+}
+
+/// Whether the footer shows at all: a job to show, or Activity open above it.
+pub fn visible(s: &App) -> bool {
+    s.jobs.list().iter().any(|j| in_footer(s, j)) || (s.activity_open && !s.jobs.list().is_empty())
+}
+
 pub fn build(s: &App, width: f32, k: &Kit) -> El {
-    let jobs = s.jobs.list();
+    let jobs: Vec<&Job> = s.jobs.list().iter().filter(|j| in_footer(s, j)).collect();
     let free = width - 2.0 * INSET - SUMMARY_W;
     let fits = |n: usize| n as f32 * (CHIP_W + 6.0) <= free;
     let shown = if fits(jobs.len()) { jobs.len() } else { (0..jobs.len()).rev().find(|&n| n as f32 * (CHIP_W + 6.0) + MORE_W <= free).unwrap_or(0).max(1) };
@@ -36,8 +50,15 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
     for job in &jobs[hidden..] {
         chips = chips.child(chip(job, k));
     }
+    let folded = s.jobs.list().len() - jobs.len();
     let running = jobs.iter().filter(|j| j.is_active()).count();
-    let lead = if running > 0 { px::lamp(&format!("{running} working"), px::AMBER) } else { px::lamp("Done", px::SILK) };
+    let lead = if running > 0 {
+        px::lamp(&format!("{running} working"), px::AMBER)
+    } else if folded > 0 {
+        px::lamp(&format!("{folded} done"), px::SILK)
+    } else {
+        px::lamp("Done", px::SILK)
+    };
     row()
         .key("statusbar")
         .w_full()

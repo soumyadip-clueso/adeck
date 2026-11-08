@@ -120,7 +120,8 @@ pub fn tab_secs(s: &App, tab: &Tab) -> f64 {
 }
 
 /// A waveform strip for one member over the tab's time window: its picture, beat grid, loop and
-/// playhead. Drag across it to scrub; double-click to send what you're on to the agent.
+/// playhead. Drag across it to scrub, shift-drag to play just that stretch; double-click to
+/// send what you're on to the agent.
 #[allow(clippy::too_many_arguments)]
 pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, k: &Kit) -> El {
     let height = height * tab.strip_h;
@@ -245,12 +246,22 @@ fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, (lo, hi)
 /// Press or drag to scrub; double-click sends what you're on to the agent.
 fn scrub_handler(strip: El, lo: f64, hi: f64) -> El {
     strip
-        .on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
+        .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
             if d.w <= 0.0 {
                 return;
             }
             let at = lo + f64::from((d.x / d.w).clamp(0.0, 1.0)) * (hi - lo);
-            s.scrub(at, d.phase);
+            // Shift-drag picks a stretch and plays just that; plain drag scrubs. The mode is
+            // set on the press (`data` 1) and kept for the whole gesture.
+            if matches!(d.phase, Phase::Down) {
+                d.data = if tx.mods().shift { 1.0 } else { 0.0 };
+            }
+            if d.data > 0.5 {
+                let from = lo + f64::from((d.start_x / d.w).clamp(0.0, 1.0)) * (hi - lo);
+                s.select_stretch(from, at, d.phase);
+            } else {
+                s.scrub(at, d.phase);
+            }
         })
         .on_double_press_tx(|s: &mut App, tx: &mut Tx| s.send_to_agent(None, tx))
 }
