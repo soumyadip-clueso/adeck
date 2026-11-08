@@ -48,6 +48,18 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         Some(text(e.to_uppercase()).font(px::pixel(10.0)).color(px::BAD).truncate().max_w(132.0).help(e.clone()))
     } else if s.mixer_is_for(t.id()) && s.mixer.is_loading() {
         Some(row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(9.0).build(k)).child(px::label("Loading")))
+    } else if let Some((a, b)) = t.selection.filter(|sel| t.loop_secs != Some(*sel)) {
+        Some(
+            row()
+                .key("selection")
+                .gap(6.0)
+                .center_y()
+                .cursor(rune::Cursor::Pointer)
+                .help("Space plays just this · L loops it · Esc clears it")
+                .child(el().size(6.0, 6.0).fill(px::LED))
+                .child(text(format!("SEL {}–{}  ×", clock(a), clock(b))).font(px::pixel(10.0)).color(px::SOFT))
+                .on_press(|s: &mut App| s.clear_loop()),
+        )
     } else {
         t.loop_secs.map(|(a, b)| {
             row()
@@ -58,7 +70,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
                 .help("Clear the loop · Esc")
                 .child(el().size(6.0, 6.0).fill(px::AMBER))
                 .child(text(format!("LOOP {}–{}  ×", clock(a), clock(b))).font(px::pixel(10.0)).color(px::AMBER))
-                .on_press(|s: &mut App| s.set_loop(None))
+                .on_press(|s: &mut App| s.clear_loop())
         })
     };
     if let Some(st) = status {

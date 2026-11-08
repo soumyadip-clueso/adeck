@@ -120,8 +120,8 @@ pub fn tab_secs(s: &App, tab: &Tab) -> f64 {
 }
 
 /// A waveform strip for one member over the tab's time window: its picture, beat grid, loop and
-/// playhead. Drag across it to scrub, shift-drag to play just that stretch; double-click to
-/// send what you're on to the agent.
+/// playhead. Drag across it to scrub, shift-drag to select a stretch; double-click to send
+/// what you're on to the agent.
 #[allow(clippy::too_many_arguments)]
 pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, k: &Kit) -> El {
     let height = height * tab.strip_h;
@@ -229,10 +229,13 @@ fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32,
 fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, (lo, hi): (f64, f64), _k: &Kit) -> El {
     let span = (hi - lo).max(1e-6);
     let x_of = |secs: f64| ((secs - lo) / span) as f32 * width;
-    if let Some((a, b)) = tab.loop_secs {
+    // The selection in white, the loop in amber (a looped selection shows as the loop).
+    let marks = [(tab.selection.filter(|sel| tab.loop_secs != Some(*sel)), px::LED, 0.07), (tab.loop_secs, px::AMBER, 0.10)];
+    for (range, ink, alpha) in marks {
+        let Some((a, b)) = range else { continue };
         let (xa, xb) = (x_of(a).clamp(0.0, width), x_of(b).clamp(0.0, width));
         if xb > xa {
-            strip = strip.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(px::AMBER.alpha(0.10)).border(1.0, px::AMBER.alpha(0.55)).inert());
+            strip = strip.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(ink.alpha(alpha)).border(1.0, ink.alpha(0.55)).inert());
         }
     }
     let ph = playhead(s, tab);
@@ -251,8 +254,8 @@ fn scrub_handler(strip: El, lo: f64, hi: f64) -> El {
                 return;
             }
             let at = lo + f64::from((d.x / d.w).clamp(0.0, 1.0)) * (hi - lo);
-            // Shift-drag picks a stretch and plays just that; plain drag scrubs. The mode is
-            // set on the press (`data` 1) and kept for the whole gesture.
+            // Shift-drag selects a stretch (Space plays it, L loops it); plain drag scrubs.
+            // The mode is set on the press (`data` 1) and kept for the whole gesture.
             if matches!(d.phase, Phase::Down) {
                 d.data = if tx.mods().shift { 1.0 } else { 0.0 };
             }

@@ -735,10 +735,10 @@ mod tests {
         assert!(rt.state.palette.is_some(), "⌘F on a page with no search should open the palette");
     }
 
-    /// Shift-drag across a waveform plays just that stretch (as the loop, from its start);
-    /// shift-click clears it; a plain drag still only scrubs.
+    /// Shift-drag across a waveform selects a stretch and plays nothing; L loops it, L again
+    /// stops looping, shift-click clears it; a plain drag still only scrubs.
     #[test]
-    fn shift_drag_on_a_waveform_plays_just_that_stretch() {
+    fn shift_drag_on_a_waveform_selects_a_stretch() {
         let shift = |rt: &mut Runtime<App>, on: bool| {
             rt.physical_input(rune::PhysicalInput::Modifiers(rune::Mods { shift: on, ..Default::default() }));
             rt.frame(0.0);
@@ -761,18 +761,27 @@ mod tests {
         rt.pointer_move(x1, y);
         rt.pointer_up(x1, y);
         rt.frame(1.0 / 60.0);
-        let (a, b) = rt.state.current().unwrap().loop_secs.expect("shift-drag made no loop");
+        let t = rt.state.current().unwrap();
+        assert!(t.loop_secs.is_none(), "shift-drag shouldn't loop");
+        let (a, b) = t.selection.expect("shift-drag made no selection");
         let span = total.1 - total.0;
-        assert!((a - (total.0 + span * 0.25)).abs() < span * 0.02 && (b - (total.0 + span * 0.5)).abs() < span * 0.02, "loop {a}..{b} of {total:?}");
-        assert!(rt.state.mixer.wants_play() || rt.state.mixer.is_playing(), "the stretch didn't start playing");
-        assert!((rt.state.mixer.secs() - a).abs() < span * 0.02, "it didn't start at the stretch");
+        assert!((a - (total.0 + span * 0.25)).abs() < span * 0.02 && (b - (total.0 + span * 0.5)).abs() < span * 0.02, "selection {a}..{b} of {total:?}");
+        assert!(!rt.state.mixer.wants_play() && !rt.state.mixer.is_playing(), "shift-drag shouldn't start playing");
+        assert!((rt.state.mixer.secs() - a).abs() < span * 0.02, "the playhead isn't parked at the selection");
+
+        // L loops the selection; L again stops looping and keeps it selected.
+        rt.state.toggle_loop();
+        assert_eq!(rt.state.current().unwrap().loop_secs, Some((a, b)));
+        rt.state.toggle_loop();
+        let t = rt.state.current().unwrap();
+        assert!(t.loop_secs.is_none() && t.selection == Some((a, b)));
 
         // Shift-click with no drag clears it.
         rt.pointer_down(x1, y);
         rt.pointer_up(x1, y);
         rt.frame(1.0 / 60.0);
         shift(&mut rt, false);
-        assert!(rt.state.current().unwrap().loop_secs.is_none(), "shift-click didn't clear the stretch");
+        assert!(rt.state.current().unwrap().selection.is_none(), "shift-click didn't clear the selection");
     }
 
     /// A finished job leaves the footer after a few seconds (failures stay); the footer goes

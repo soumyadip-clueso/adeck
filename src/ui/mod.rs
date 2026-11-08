@@ -407,11 +407,12 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             return true;
         }
         rune::Key::Escape => {
-            s.set_loop(None);
+            s.clear_loop();
             return true;
         }
-        rune::Key::Text(ch) if matches!(ch.as_str(), "=" | "+" | "-" | "f" | "n" | "s" | "[" | "]") => {
+        rune::Key::Text(ch) if matches!(ch.as_str(), "=" | "+" | "-" | "f" | "n" | "s" | "[" | "]" | "l") => {
             match ch.as_str() {
+                "l" => s.toggle_loop(),
                 "=" | "+" => s.zoom(0.5),
                 "-" => s.zoom(2.0),
                 "f" => s.zoom_fit(),
@@ -475,8 +476,8 @@ fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
         rune::Key::Right => s.board_step_member(1),
         rune::Key::Enter => s.board_pick(),
         rune::Key::Escape => {
-            if s.current().is_some_and(|t| t.loop_secs.is_some()) {
-                s.set_loop(None);
+            if s.current().is_some_and(|t| t.loop_secs.is_some() || t.selection.is_some()) {
+                s.clear_loop();
             } else {
                 s.toggle_pane();
             }
@@ -493,7 +494,7 @@ fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
                     s.board_play(&key, m);
                 }
                 'r' => s.board_replay(),
-                'l' => s.board_toggle_loop(),
+                'l' => s.toggle_loop(),
                 'z' => s.toggle_zoom(),
                 'k' => s.decide_active("keep"),
                 'd' => s.decide_active("drop"),

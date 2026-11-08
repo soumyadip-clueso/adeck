@@ -90,6 +90,8 @@ pub struct Tab {
     /// The member you hear, by member index.
     pub active: usize,
     pub loop_secs: Option<(f64, f64)>,
+    /// A shift-dragged stretch: Space plays just it, L loops it.
+    pub selection: Option<(f64, f64)>,
     /// Run tabs: the rows, as item ids in table order.
     pub rows: Vec<String>,
     pub table: TableState,
@@ -128,6 +130,7 @@ impl Tab {
             spec,
             active: 0,
             loop_secs: None,
+            selection: None,
             rows: Vec::new(),
             table: TableState::new().multi_select(true),
             filter,
@@ -724,7 +727,7 @@ impl App {
         }
         let tab = t.id();
         let slots = slots(t);
-        let (active, loop_secs) = (t.active, t.loop_secs);
+        let (active, loop_secs, selection) = (t.active, t.loop_secs, t.selection);
         let paths: Option<Vec<(String, PathBuf)>> = slots.iter().map(|&m| t.spec.items.get(m).and_then(|i| self.items.get(i).map(|e| (i.clone(), e.item.path.clone())))).collect();
         let Some(paths) = paths else { return };
         if paths.is_empty() {
@@ -733,6 +736,7 @@ impl App {
         self.mixer.load(tab, paths);
         self.mixer.set_active(slots.iter().position(|&m| m == active).unwrap_or(0));
         self.mixer.set_loop_secs(loop_secs);
+        self.mixer.set_range_secs(selection);
         self.apply_trims();
     }
 
@@ -1399,10 +1403,16 @@ impl App {
             words.push(if hidden { shown } else { format!("{shown} \u{2014} {name}") });
             items.push(id);
         }
-        let range = t.loop_secs.or(t.view);
+        let range = t.loop_secs.or(t.selection).or(t.view);
         if let Some((a, b)) = range {
             v["range_s"] = json!([(a * 1000.0).round() / 1000.0, (b * 1000.0).round() / 1000.0]);
-            v["range_is"] = json!(if t.loop_secs.is_some() { "loop" } else { "zoom" });
+            v["range_is"] = json!(if t.loop_secs.is_some() {
+                "loop"
+            } else if t.selection.is_some() {
+                "selection"
+            } else {
+                "zoom"
+            });
             words.push(format!("{}\u{2013}{}", crate::ui::widgets::clock(a), crate::ui::widgets::clock(b)));
         }
         if self.mixer_is_for(t.id()) {
@@ -1461,7 +1471,7 @@ impl App {
     /// Fits the whole file, or the loop when there is one and it isn't already shown.
     pub fn zoom_fit(&mut self) {
         let Some(t) = self.current_mut() else { return };
-        t.view = match t.loop_secs {
+        t.view = match t.loop_secs.or(t.selection) {
             Some(l) if t.view != Some(l) => Some(l),
             _ => None,
         };
@@ -1510,23 +1520,54 @@ impl App {
         }
     }
 
-    /// Shift-drag on a strip: the stretch shows as the loop while you drag; let go and only
-    /// that stretch plays, round and round, from its start. A shift-click with no stretch
-    /// clears it.
+    /// Shift-drag on a strip selects a stretch; nothing plays. Space then plays just the
+    /// stretch and stops at its end, and L loops it. A shift-click with no stretch clears it.
     pub fn select_stretch(&mut self, from: f64, at: f64, phase: rune::Phase) {
         let (a, b) = (from.min(at).max(0.0), from.max(at));
         let real = b - a >= 0.01;
-        match phase {
-            rune::Phase::Up if !real => self.set_loop(None),
-            rune::Phase::Up => {
-                self.set_loop(Some((a, b)));
-                self.seek_secs(a);
-                self.sync_mixer();
-                self.mixer.play();
+        if real {
+            // A new stretch replaces any loop that was running on the old one.
+            if self.current().is_some_and(|t| t.loop_secs.is_some()) {
+                self.set_loop(None);
             }
-            _ if real => self.set_loop(Some((a, b))),
-            _ => {}
+            self.set_selection(Some((a, b)));
+            if matches!(phase, rune::Phase::Up) {
+                // Parked at its start, ready for Space; nothing plays until you ask.
+                let playing = self.mixer.is_playing();
+                self.seek_secs(a);
+                if !playing {
+                    self.mixer.pause();
+                }
+            }
+        } else if matches!(phase, rune::Phase::Up) {
+            self.set_selection(None);
+            self.set_loop(None);
         }
+    }
+
+    pub fn set_selection(&mut self, sel: Option<(f64, f64)>) {
+        if let Some(t) = self.current_mut() {
+            t.selection = sel;
+        }
+        self.mixer.set_range_secs(sel);
+    }
+
+    /// L: loop the selection (or, on a board, what the strip shows); again to stop looping.
+    pub fn toggle_loop(&mut self) {
+        let Some(t) = self.current() else { return };
+        if t.loop_secs.is_some() {
+            self.set_loop(None);
+        } else if let Some(sel) = t.selection {
+            self.set_loop(Some(sel));
+        } else if t.spec.kind == TabKind::Board {
+            self.board_toggle_loop();
+        }
+    }
+
+    /// Esc: drop the loop and the selection.
+    pub fn clear_loop(&mut self) {
+        self.set_loop(None);
+        self.set_selection(None);
     }
 
     pub fn scrub(&mut self, at: f64, phase: rune::Phase) {

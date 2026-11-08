@@ -290,10 +290,7 @@ pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     let looping = t.loop_secs.is_some();
     let mut keys = vec![
         px::key_k("REPLAY", "R", false).key("replay").help("From the start of the sound · R").on_press(|s: &mut App| s.board_replay()),
-        px::key_k("LOOP", "L", looping)
-            .key("loop-toggle")
-            .help("Loop what the strip shows · L. Drag across the strip to loop part of it.")
-            .on_press(|s: &mut App| s.board_toggle_loop()),
+        px::key_k("LOOP", "L", looping).key("loop-toggle").help("Loop what the strip shows · L. Drag across the strip to loop part of it.").on_press(|s: &mut App| s.toggle_loop()),
     ];
     if t.spec.blind && !t.spec.revealed_groups.contains(&g.key) {
         keys.push(

@@ -24,13 +24,18 @@ type Decoded = Result<(Vec<Arc<Vec<f32>>>, u64), String>;
 type Opened = Result<(Sender<Cmd>, u32), String>;
 
 enum Cmd {
-    Load { set: u64, tracks: Vec<Arc<Vec<f32>>> },
+    Load {
+        set: u64,
+        tracks: Vec<Arc<Vec<f32>>>,
+    },
     Play,
     Pause,
     Seek(u64),
     Active(usize),
     Trims(Vec<f32>),
     Loop(Option<(u64, u64)>),
+    /// A selection: play stops at its end (unless a loop is set).
+    Range(Option<(u64, u64)>),
     Volume(f32),
 }
 
@@ -67,6 +72,8 @@ pub struct Mixer {
     decoding: Option<(u64, Receiver<Decoded>)>,
     pub active: usize,
     pub loop_frames: Option<(u64, u64)>,
+    /// The selection, in frames: play starts at its start and stops at its end.
+    pub range_frames: Option<(u64, u64)>,
     want_play: bool,
     waker: Option<rune::Waker>,
     /// A load waiting for the device to open.
@@ -108,6 +115,7 @@ impl Default for Mixer {
             decoding: None,
             active: 0,
             loop_frames: None,
+            range_frames: None,
             want_play: false,
             waker: None,
             pending: None,
@@ -199,6 +207,7 @@ impl Mixer {
         self.frames = 0;
         self.active = 0;
         self.loop_frames = None;
+        self.range_frames = None;
         self.shared.pos.store(0, Ordering::Release);
         self.shared.playing.store(false, Ordering::Release);
         self.send(Cmd::Pause);
@@ -251,7 +260,13 @@ impl Mixer {
     pub fn play(&mut self) {
         self.want_play = true;
         if !self.is_loading() && self.frames > 0 {
-            if self.position() >= self.frames.saturating_sub(1) && self.loop_frames.is_none() {
+            let at = self.position();
+            if let Some((a, b)) = self.range_frames.filter(|_| self.loop_frames.is_none()) {
+                // Outside the selection, or at its end: start again from its start.
+                if at < a || at + 1 >= b {
+                    self.seek_frames(a);
+                }
+            } else if at >= self.frames.saturating_sub(1) && self.loop_frames.is_none() {
                 self.seek_frames(0);
             }
             self.shared.playing.store(true, Ordering::Release);
@@ -325,6 +340,12 @@ impl Mixer {
     /// Linear gains per member.
     pub fn set_trims(&mut self, trims: Vec<f32>) {
         self.send(Cmd::Trims(trims));
+    }
+
+    pub fn set_range_secs(&mut self, r: Option<(f64, f64)>) {
+        let rate = f64::from(self.rate);
+        self.range_frames = r.map(|(a, b)| ((a.min(b) * rate) as u64, (a.max(b) * rate) as u64)).filter(|(a, b)| b > a);
+        self.send(Cmd::Range(self.range_frames));
     }
 
     pub fn set_loop_secs(&mut self, l: Option<(f64, f64)>) {
@@ -441,6 +462,7 @@ struct State {
     len: u64,
     playing: bool,
     looping: Option<(u64, u64)>,
+    range: Option<(u64, u64)>,
     step: f32,
     /// Fade in after a seek or start, out before a pause, so nothing clicks.
     master: f32,
@@ -464,6 +486,7 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
         len: 0,
         playing: false,
         looping: None,
+        range: None,
         step: 1.0 / (XFADE * rate as f32),
         master: 0.0,
         volume: 1.0,
@@ -495,6 +518,7 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                 Cmd::Active(i) => s.active = i,
                 Cmd::Trims(t) => s.trims = t,
                 Cmd::Loop(l) => s.looping = l,
+                Cmd::Range(r) => s.range = r,
                 Cmd::Volume(v) => s.volume = v,
             }
         }
@@ -539,6 +563,16 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                     && s.pos >= b
                 {
                     s.pos = a;
+                }
+                // The end of a selection stops it, like the end of the file.
+                if s.looping.is_none()
+                    && let Some((_, b)) = s.range
+                    && s.pos >= b
+                {
+                    s.pos = b;
+                    s.playing = false;
+                    sh.playing.store(false, Ordering::Release);
+                    sh.ended.store(true, Ordering::Release);
                 }
                 if s.pos >= s.len {
                     s.pos = s.len.saturating_sub(1);
