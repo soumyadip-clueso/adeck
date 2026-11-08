@@ -4,6 +4,7 @@ pub mod board;
 pub mod compare;
 pub mod diff;
 pub mod pads;
+pub mod palette;
 pub mod shared;
 pub mod sheet;
 pub mod icons;
@@ -65,6 +66,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let t = Toast::new("toast", msg.clone()).icon(k, if *err { &icons::WARNING } else { &icons::CHECK }).closable().on_close(|s: &mut App| s.toast = None).build(k);
         layer.push(el().absolute(0.0, 0.0).w_full().h_full().inert().child(ToastRegion::new().toast(t).build(k)));
     }
+    palette::build(s, footer_w, k, &mut layer);
     root.children(layer).on_drop_files(|s: &mut App, files, _| s.open_files(files.to_vec())).accepts_files(|p: &std::path::Path| crate::item::media_of(p).is_some() || p.is_dir())
 }
 
@@ -113,7 +115,8 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(el().size(7.0, 7.0).radius(4.0).fill(if s.calls.is_some() { k.c.success.icon } else { k.c.icon_faint }))
         .child(text(s.mcp_status.clone()).font(k.ty.small).color(k.c.text_muted))
         .help("Connect with: claude mcp add --transport http adeck http://127.0.0.1:<port>/mcp");
-    WindowTitlebar::from_insets(cx.chrome_insets(), 1.0).tabs(strip).trailing(mcp).build(k)
+    let trailing = row().gap(10.0).center_y().child(palette::pill(k)).child(mcp);
+    WindowTitlebar::from_insets(cx.chrome_insets(), 1.0).tabs(strip).trailing(trailing).build(k)
 }
 
 pub fn tab_title(s: &App, t: &crate::app::Tab) -> String {
@@ -198,7 +201,7 @@ pub fn pick_files(tx: &mut Tx, add: bool) {
     });
 }
 
-fn pick_folder(tx: &mut Tx) {
+pub fn pick_folder(tx: &mut Tx) {
     tx.open_folder(rune::FileDialogOptions { title: "Open a folder of audio".into(), ..Default::default() }, |s: &mut App, r, _tx: &mut Tx| {
         if let Ok(Some(p)) = r {
             s.open_folder(p);
@@ -255,6 +258,17 @@ fn empty(s: &App, k: &Kit) -> El {
 
 pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let plain = !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl;
+    if ev.is_command('k') || (ev.is_command('p') && ev.mods.shift) {
+        if s.palette.is_some() {
+            s.palette = None;
+        } else {
+            palette::open(s);
+        }
+        return true;
+    }
+    if s.palette.is_some() {
+        return false;
+    }
     if ev.is_command('t') {
         s.open_new_menu();
         return true;

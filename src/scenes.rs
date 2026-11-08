@@ -8,7 +8,7 @@ use crate::app::{App, TabKind};
 
 type Scene = (&'static str, fn(&mut App));
 
-pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads)];
+pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads), ("palette", palette), ("palette-search", palette_search)];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -172,6 +172,21 @@ fn pads(s: &mut App) {
     a["label"] = serde_json::json!("UI sounds");
     let _ = s.call("open_pads", &a);
     s.settle_now();
+}
+
+/// ⌘K over a board, empty and then searching.
+fn palette(s: &mut App) {
+    board(s);
+    crate::ui::palette::open(s);
+}
+
+fn palette_search(s: &mut App) {
+    board(s);
+    crate::ui::palette::open(s);
+    if let Some(p) = s.palette.as_mut() {
+        p.query = rune::TextEdit::new("tone");
+        p.query.focused = true;
+    }
 }
 
 fn diff(s: &mut App) {
@@ -527,6 +542,27 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(rt.state.shares.is_empty() && !out.exists(), "taken down");
+    }
+
+    #[test]
+    fn command_k_finds_commands_tabs_and_sounds_and_runs_them() {
+        let mut rt = rt(palette_search);
+        assert!(rt.find("palette").is_some() && rt.find("pal-0").is_some(), "the palette is up");
+        let hits = crate::ui::palette::results(&rt.state, "tone");
+        assert!(hits.iter().any(|h| h.section == "Sounds"), "sounds are searchable: {:?}", hits.iter().map(|h| &h.title).collect::<Vec<_>>());
+        let hits = crate::ui::palette::results(&rt.state, "blind");
+        assert_eq!(hits[0].act, crate::ui::palette::Act::Cmd("blind"));
+        // Clicking a row runs it and closes the palette.
+        rt.state.palette.as_mut().unwrap().query = rune::TextEdit::new("blind");
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        let (x, y) = rt.find("pal-0").unwrap();
+        let was = rt.state.current().unwrap().spec.blind;
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.palette.is_none(), "closed after running");
+        assert_ne!(rt.state.current().unwrap().spec.blind, was, "blind toggled");
     }
 
     #[test]
