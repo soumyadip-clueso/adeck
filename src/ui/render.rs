@@ -76,7 +76,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
             let id3 = id.clone();
             row().key("sheet").gap(8.0).child(
                 Button::new(if busy { "Drawing the sheet…" } else { "Draw earshot sheet" })
-                    .variant(ButtonVariant::Ghost)
+                    .variant(ButtonVariant::Outline)
                     .control_size(ControlSize::Small)
                     .disabled(busy || e.is_none())
                     .on_press(move |s: &mut App| s.run_sheet(&id3))

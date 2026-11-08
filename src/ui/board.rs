@@ -94,7 +94,7 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
         let k2 = key.clone();
         head = head.child(
             Button::new("Open")
-                .variant(ButtonVariant::Ghost)
+                .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)
                 .on_press(move |s: &mut App| {
                     s.focus_group(&k2);
@@ -264,7 +264,7 @@ pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     caption = caption.child(spacer());
     let looping = t.loop_secs.is_some();
     caption = caption
-        .child(Button::new("Replay").variant(ButtonVariant::Ghost).control_size(ControlSize::Small).help("From the start of the sound · R").on_press(|s: &mut App| s.board_replay()).build(k).key("replay"))
+        .child(Button::new("Replay").variant(ButtonVariant::Outline).control_size(ControlSize::Small).help("From the start of the sound · R").on_press(|s: &mut App| s.board_replay()).build(k).key("replay"))
         .child(
             Button::new(if looping { "Looping" } else { "Loop" })
                 .variant(if looping { ButtonVariant::Contrast } else { ButtonVariant::Outline })
@@ -394,7 +394,7 @@ fn details(s: &App, t: &Tab, mem: &Member, e: Option<&Entry>, width: f32, k: &Ki
     let c = &k.c;
     let open = t.details_open;
     let toggle = Button::new(if open { "Details ▾" } else { "Details ▸" })
-        .variant(ButtonVariant::Ghost)
+        .variant(ButtonVariant::Outline)
         .control_size(ControlSize::Small)
         .on_press(|s: &mut App| {
             if let Some(t) = s.current_mut() {
@@ -495,7 +495,7 @@ fn decisions(s: &App, t: &Tab, mem: &Member, k: &Kit) -> Option<El> {
         let moved = now.and_then(|n| n.strip_prefix("move:"));
         r = r.child(
             Button::new(moved.map_or_else(|| "Move to…".to_owned(), |m| format!("Moved to {m}")))
-                .variant(if moved.is_some() { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+                .variant(if moved.is_some() { ButtonVariant::Contrast } else { ButtonVariant::Outline })
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut App| {
                     if let Some(t) = s.current_mut() {
@@ -524,7 +524,7 @@ fn more(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     let open = t.more_open.contains(&g.key);
     let key = g.key.clone();
     let toggle = Button::new(if open { format!("Hide the other {} ▾", g.more.len()) } else { format!("The other {} takes, ranked ▸", g.more.len()) })
-        .variant(ButtonVariant::Ghost)
+        .variant(ButtonVariant::Outline)
         .control_size(ControlSize::Small)
         .on_press(move |s: &mut App| s.toggle_more(&key))
         .build(k)

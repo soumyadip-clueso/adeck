@@ -374,13 +374,13 @@ pub fn transport(s: &App, tab: &Tab, k: &Kit) -> El {
     if let Some((a, b)) = tab.view.filter(|_| total > 0.0) {
         scrub = scrub.child(at_frac((a / total) as f32, el().offset(0.0, 4.0).w_frac(((b - a) / total) as f32).h(10.0).radius(3.0).border(1.0, c.text_muted.alpha(0.6))));
     }
-    let ghost = |label: &str, help: &str, key: &str| Button::new(label.to_owned()).variant(ButtonVariant::Ghost).control_size(ControlSize::Small).help(help.to_owned()).build(k).key(key.to_owned());
+    let small = |label: &str, help: &str, key: &str| Button::new(label.to_owned()).variant(ButtonVariant::Outline).control_size(ControlSize::Small).help(help.to_owned()).build(k).key(key.to_owned());
     let zoom = row()
-        .gap(0.0)
+        .gap(4.0)
         .center_y()
-        .child(ghost("−", "Zoom out · −", "zoom-out").on_press(|s: &mut App| s.zoom(2.0)))
-        .child(ghost(if tab.view.is_some() { "Fit" } else { "All" }, "Whole file, or the loop · F", "zoom-fit").on_press(|s: &mut App| s.zoom_fit()))
-        .child(ghost("+", "Zoom in · =", "zoom-in").on_press(|s: &mut App| s.zoom(0.5)));
+        .child(small("−", "Zoom out · −", "zoom-out").on_press(|s: &mut App| s.zoom(2.0)))
+        .child(small(if tab.view.is_some() { "Fit" } else { "All" }, "Whole file, or the loop · F", "zoom-fit").on_press(|s: &mut App| s.zoom_fit()))
+        .child(small("+", "Zoom in · =", "zoom-in").on_press(|s: &mut App| s.zoom(0.5)));
     let vol = s.mixer.volume;
     let volume = row()
         .gap(4.0)
@@ -405,7 +405,7 @@ pub fn transport(s: &App, tab: &Tab, k: &Kit) -> El {
     if let Some((a, b)) = tab.loop_secs {
         r = r.child(
             Button::new(format!("Loop {}–{}  ✕", clock(a), clock(b)))
-                .variant(ButtonVariant::Ghost)
+                .variant(ButtonVariant::Outline)
                 .control_size(ControlSize::Small)
                 .help("Clear the loop · Esc")
                 .on_press(|s: &mut App| s.set_loop(None))
@@ -416,7 +416,7 @@ pub fn transport(s: &App, tab: &Tab, k: &Kit) -> El {
     r = r
         .child(
             Button::new("Note")
-                .variant(if tab.note_open { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+                .variant(if tab.note_open { ButtonVariant::Contrast } else { ButtonVariant::Outline })
                 .control_size(ControlSize::Small)
                 .help("Write a note for the agent · N")
                 .on_press(|s: &mut App| s.toggle_note())

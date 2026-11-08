@@ -52,7 +52,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         )
         .child(
             Button::new("Note")
-                .variant(if t.note_open { ButtonVariant::Contrast } else { ButtonVariant::Ghost })
+                .variant(if t.note_open { ButtonVariant::Contrast } else { ButtonVariant::Outline })
                 .control_size(ControlSize::Small)
                 .on_press(|s: &mut App| s.toggle_note())
                 .build(k)

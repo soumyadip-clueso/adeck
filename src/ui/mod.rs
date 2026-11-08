@@ -216,7 +216,7 @@ pub fn drop_zone(msg: &str, k: &Kit) -> El {
             row()
                 .gap(8.0)
                 .child(rune_kit::Button::new("Open file…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare))).build(k).key("dz-file"))
-                .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Ghost).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("dz-folder")),
+                .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("dz-folder")),
         )
 }
 
@@ -238,7 +238,7 @@ fn empty(s: &App, k: &Kit) -> El {
                 .py(4.0)
                 .child(rune_kit::Button::new("Open file…").variant(rune_kit::ButtonVariant::Contrast).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_files(tx, false)).build(k).key("empty-file"))
                 .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("empty-folder"))
-                .child(rune_kit::Button::new("New compare").variant(rune_kit::ButtonVariant::Ghost).on_press(|s: &mut App| s.new_compare()).build(k).key("empty-compare")),
+                .child(rune_kit::Button::new("New compare").variant(rune_kit::ButtonVariant::Outline).on_press(|s: &mut App| s.new_compare()).build(k).key("empty-compare")),
         )
         .child(text(hint).font(rune::TextStyle { size: 11.0, ..k.ty.mono }).color(c.text_faint).selectable(true).py(6.0))
 }
