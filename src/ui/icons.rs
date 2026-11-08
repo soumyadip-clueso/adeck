@@ -51,3 +51,15 @@ pub static TABLE: Icon = Icon {
     view: 16.0,
     body: r#"<rect x="2.75" y="3.25" width="10.5" height="9.5" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M2.75 6.5H13.25M2.75 9.5H13.25M6.5 6.5V12.75" stroke="currentColor" stroke-width="1.2"/>"#,
 };
+
+pub static BOARD: Icon = Icon {
+    name: "adeck-board",
+    view: 16.0,
+    body: r#"<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="9" y="9" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/>"#,
+};
+
+pub static DIFF: Icon = Icon {
+    name: "adeck-diff",
+    view: 16.0,
+    body: r#"<path d="M5 2.5V9.5M2.5 6H7.5M9 12H13.5M11.25 2.5L11.25 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
+};

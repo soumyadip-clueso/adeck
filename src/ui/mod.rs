@@ -1,6 +1,8 @@
 //! The window: tabs along the titlebar, the front tab's content, and the footer.
 
+pub mod board;
 pub mod compare;
+pub mod diff;
 pub mod icons;
 pub mod render;
 pub mod run;
@@ -33,6 +35,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             TabKind::Compare => compare::build(s, t, width, k),
             TabKind::Render => render::build(s, t, width, k),
             TabKind::Run => run::build(s, t, k),
+            TabKind::Board => board::build(s, t, width, k),
+            TabKind::Diff => diff::build(s, t, width, k),
         },
     };
     let footer_w = cx.layout_size("statusbar").map_or(1280.0, |z| z[0]);
@@ -58,6 +62,8 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
                 TabKind::Compare => &icons::COMPARE,
                 TabKind::Render => &icons::FILM,
                 TabKind::Run => &icons::TABLE,
+                TabKind::Board => &icons::BOARD,
+                TabKind::Diff => &icons::DIFF,
             };
             TabItem::new(t.id().to_string(), tab_title(s, t)).icon(icon)
         })
@@ -98,6 +104,8 @@ pub fn tab_title(s: &App, t: &crate::app::Tab) -> String {
     }
     match t.spec.kind {
         TabKind::Run => t.spec.run.clone().unwrap_or_else(|| "Run".into()),
+        TabKind::Board => "Board".into(),
+        TabKind::Diff => t.spec.diff.as_ref().map_or_else(|| "Diff".into(), |d| format!("{} vs {}", d.a, d.b)),
         _ if t.is_blind_hidden() => format!("Blind ×{}", t.spec.items.len()),
         TabKind::Compare | TabKind::Render if t.spec.items.len() > 1 => {
             format!("{} ×{}", short(s, &t.spec.items[0]), t.spec.items.len())
@@ -133,11 +141,14 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return true;
     }
-    let Some(t) = s.current() else { return false };
-    let kind = t.spec.kind;
-    if kind == TabKind::Run {
+    let Some(kind) = s.current().map(|t| t.spec.kind) else { return false };
+    if matches!(kind, TabKind::Run | TabKind::Diff) {
         return false;
     }
+    if kind == TabKind::Board && board_key(s, ev) {
+        return true;
+    }
+    let Some(t) = s.current() else { return false };
     if ev.key == rune::Key::Text(" ".into()) && plain {
         s.toggle_play();
         return true;
@@ -187,4 +198,48 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     let _ = tx;
     false
+}
+
+/// A board's keys: ↑/↓ group, ←/→ member (⇧ seeks), 1-9 member, R replay, L loop, Z zoom,
+/// K keep, D drop, B blind, M match, Enter pick.
+fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
+    if ev.mods.cmd || ev.mods.alt || ev.mods.ctrl {
+        return false;
+    }
+    match &ev.key {
+        rune::Key::Up => s.board_step_group(-1),
+        rune::Key::Down => s.board_step_group(1),
+        rune::Key::Left | rune::Key::Right if ev.mods.shift => {
+            let by = if ev.key == rune::Key::Left { -5.0 } else { 5.0 };
+            let at = s.mixer.secs() + by;
+            s.seek_secs(at);
+        }
+        rune::Key::Left => s.board_step_member(-1),
+        rune::Key::Right => s.board_step_member(1),
+        rune::Key::Enter => s.board_pick(),
+        rune::Key::Escape => s.set_loop(None),
+        rune::Key::Text(ch) if ch.chars().count() == 1 => {
+            let d = ch.chars().next().unwrap_or(' ').to_ascii_lowercase();
+            match d {
+                '1'..='9' => {
+                    let pos = (d as u8 - b'1') as usize;
+                    let Some(t) = s.current() else { return false };
+                    let Some(g) = t.focused() else { return false };
+                    let Some(&m) = t.group_order(g).get(pos) else { return true };
+                    let key = g.key.clone();
+                    s.board_play(&key, m);
+                }
+                'r' => s.board_replay(),
+                'l' => s.board_toggle_loop(),
+                'z' => s.toggle_zoom(),
+                'k' => s.decide_active("keep"),
+                'd' => s.decide_active("drop"),
+                'b' => s.toggle_blind(),
+                'm' => s.toggle_loudness_match(),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
 }

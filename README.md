@@ -12,12 +12,16 @@ Forked from [Sleeve](https://github.com/alii/sleeve), a rekordbox app by Alistai
 - **A compare (2 to 9 files)**: every waveform on one time axis with one playhead. They all play at once and you hear one; keys 1 to 9 switch at exactly the same moment, with no gap. Loudness matching (on by default) brings each file to the same LUFS, so the louder one doesn't win by being louder. Blind mode hides the names as X, Y, Z until you pick. A table shows only the metadata that differs. Enter picks the one you're hearing.
 - **A render**: the video, earshot's scorecard and fixes, and every picture cut marked by whether it got a hit, some sound, or silence. Several renders switch like a compare.
 - **A run**: every item as a sortable table. Filter by any text, show what you haven't scored, open one or compare a selection.
+- **A board**: one card per group (a category, say), sorted by whatever the agent says matters (search count, say), each a row of tiles: the picks, the raw "before", the reference files, with the agent's numbers and a verdict chip, and a tally on top. Click a tile to play it; only one plays, and switching inside a group keeps the position, loudness-matched. The group in focus opens up: waveform and spectrogram zoomed to the sound (a 60 ms click fills the strip), bands, stereo width, tail and attack against the group's target, what made the file (prompt, model, seed, chain, a copyable path), keep / drop / move-to, and the ranked rest of the takes, folded. Blind hides who's who in each group as X, Y, Z until you pick. The agent adds or replaces groups while it's open.
+- **A diff**: run A against run B, one row per group, one column per metric, the change coloured by which way is better, with how many got better and worse. A row that names a file from each side opens them as a compare.
 
 Click a waveform to seek, drag across it to loop, Space plays, ← and → step a second (with ⇧, five), Esc clears the loop, ⌘W closes the tab. Tabs come back when you reopen adeck.
 
+On a board: ↑ ↓ change group, ← → play the previous or next tile (⇧ seeks five seconds), 1 to 9 play a tile, R replays from the start of the sound, L loops what the strip shows, Z zooms to the sound or the whole file, K keeps, D drops, B goes blind, M toggles the loudness match, Enter picks.
+
 ## Verdicts
 
-Every score, pick and note is one JSON line in `~/.config/adeck/feedback.jsonl`. When all the items sit in one local run, the line also goes into that run's own `feedback.jsonl`. A blind pick records which label was which. The agent reads them with `get_feedback`, or waits for the next one with `wait_for_feedback`.
+Every score, pick, note and keep/drop/move decision is one JSON line in `~/.config/adeck/feedback.jsonl`. When all the items sit in one local run, the line also goes into that run's own `feedback.jsonl`. A blind pick records which label was which. The agent reads them with `get_feedback`, or waits for the next one with `wait_for_feedback`.
 
 ## Get it
 
@@ -54,6 +58,9 @@ Or in a project's `.mcp.json`:
 | `screenshot_tab` | A PNG of a tab as you see it |
 | `get_feedback`, `wait_for_feedback` | Your verdicts |
 | `analyze` | Run earshot `describe`, `measure`, `critique` or `timeline` (cached) |
+| `open_board`, `board_upsert` | A board of groups; add or replace groups (or a diff's rows) while it's open |
+| `open_diff` | Run A against run B, per group and metric |
+| `get_decisions` | Your latest keep / drop / move on each file of a board |
 
 Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
 

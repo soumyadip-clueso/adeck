@@ -234,13 +234,14 @@ pub fn score_buttons(s: &App, tab: &Tab, k: &Kit) -> El {
 /// The note field and its save button, shared by every tab.
 pub fn note_field(tab: &Tab, k: &Kit) -> El {
     let input = rune_kit::TextInput::new(&tab.note)
-        .placeholder("Note for the LLM (saved with your next score or pick)")
+        .placeholder("Note for the agent")
         .on_edit(|s: &mut App| &mut s.current_mut().expect("a tab").note)
         .build(k)
         .key("note")
-        .grow(1.0);
+        .grow(1.0)
+        .min_w(0.0);
     let save = Button::new("Save note").variant(ButtonVariant::Ghost).control_size(ControlSize::Small).on_press(|s: &mut App| s.note_only()).build(k).key("note-save");
-    row().w_full().gap(8.0).center_y().child(input).child(save)
+    row().w_full().gap(8.0).center_y().child(col().grow(1.0).min_w(0.0).child(input.w_full())).child(save)
 }
 
 /// Rows of key and value, in a scrolling column.

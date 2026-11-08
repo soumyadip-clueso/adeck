@@ -239,6 +239,44 @@ fn tool(name: &str, description: &str, props: Value, required: &[&str]) -> Value
     json!({"name": name, "description": description, "inputSchema": {"type": "object", "properties": props, "required": required}})
 }
 
+fn metrics() -> Value {
+    json!({"type": "array", "description": "Labels for the numbers, and which way is better.", "items": {"type": "object", "properties": {
+        "key": {"type": "string"}, "label": {"type": "string"}, "better": {"type": "string", "enum": ["higher", "lower"]}, "help": {"type": "string"}
+    }, "required": ["key"]}})
+}
+
+fn board_groups() -> Value {
+    let chip = json!({"type": "object", "properties": {"text": {"type": "string"}, "tone": {"type": "string", "enum": ["good", "close", "bad", "other"]}}});
+    let member = json!({"type": "object", "properties": {
+        "item": {"type": "string", "description": "Item id."},
+        "role": {"type": "string", "description": "pick | before | ref | anything."},
+        "label": {"type": "string"},
+        "numbers": {"type": "object", "description": "Your scores, shown in this order: {\"vibe\": 1.05, \"shape\": 0.51}."},
+        "chip": chip,
+        "meta": {"type": "object", "description": "prompt, model, seed, chain… shown under Details."},
+        "measure": {"type": "object", "description": "earshot measure-shaped numbers (bands_db, correlation, decay_ms); adeck runs earshot when absent."}
+    }, "required": ["item"]});
+    json!({"type": "array", "items": {"type": "object", "properties": {
+        "key": {"type": "string"},
+        "title": {"type": "string"},
+        "subtitle": {"type": "string"},
+        "sort": {"type": "number", "description": "Bigger first, e.g. search count."},
+        "chip": chip,
+        "target": {"type": "object", "description": "What the members should measure like: bands_db {sub, low, lowmid, mid, presence}, correlation, decay_ms, attack_ms, lufs. target_ prefixes are dropped."},
+        "members": {"type": "array", "items": member},
+        "more": {"type": "array", "items": member, "description": "The rest, best first, folded."},
+        "note": {"type": "string"}
+    }, "required": ["key"]}})
+}
+
+fn diff_rows() -> Value {
+    json!({"type": "array", "items": {"type": "object", "properties": {
+        "key": {"type": "string"}, "title": {"type": "string"}, "sort": {"type": "number"},
+        "a": {"type": "object", "description": "Metric values for A."}, "b": {"type": "object"},
+        "items": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}}}
+    }, "required": ["key"]}})
+}
+
 pub fn tools() -> Vec<Value> {
     let items = json!({"type": "array", "items": {"type": "string"}, "description": "Item ids: absolute paths, run:<run>/<path>, ref:<path>, or s3:// URLs."});
     let tab = json!({"type": "integer", "description": "A tab id from an open_* call or list_tabs."});
@@ -286,6 +324,39 @@ pub fn tools() -> Vec<Value> {
             json!({"run": {"type": "string"}, "filter": {"type": "string"}, "label": {"type": "string"}}),
             &["run"],
         ),
+        tool(
+            "open_board",
+            "Open a board: one group per category, each a row of members (picks, a raw \"before\", reference files) with your numbers and a verdict chip on each, a target the analysis bars compare against, and a ranked rest kept folded. Clicking a tile plays it; one plays at a time; switching keeps the position. Fill it now or later with board_upsert as results land. Reference ids (ref:) are played from this machine and never leave it.",
+            json!({
+                "label": {"type": "string"},
+                "note": note,
+                "groups": board_groups(),
+                "metrics": metrics(),
+                "choices": {"type": "array", "items": {"type": "string"}, "description": "Decisions offered on each file, e.g. [\"keep\", \"drop\"]. Read them back with get_decisions."},
+                "move_to": {"type": "array", "items": {"type": "string"}, "description": "Groups a file can be moved to; recorded as move:<group>."},
+                "blind": {"type": "boolean", "description": "Hide which member is which (X/Y/Z, shuffled) in each group until the user picks."},
+                "loudness_match": {"type": "boolean", "description": "Default true."}
+            }),
+            &[],
+        ),
+        tool(
+            "board_upsert",
+            "Add groups to an open board, or replace them by key, while the user watches; or rows to an open diff. remove drops groups by key.",
+            json!({"tab_id": tab, "groups": board_groups(), "rows": diff_rows(), "metrics": metrics(), "remove": {"type": "array", "items": {"type": "string"}}}),
+            &["tab_id"],
+        ),
+        tool(
+            "open_diff",
+            "Open run A against run B: one row per group, one column per metric, B minus A coloured by which way is better, with a count of how many got better and worse. Rows with items open as a compare when clicked.",
+            json!({"label": {"type": "string"}, "note": note, "a": {"type": "string", "description": "What A is, e.g. \"chain v1\"."}, "b": {"type": "string"}, "metrics": metrics(), "rows": diff_rows()}),
+            &["a", "b"],
+        ),
+        tool(
+            "get_decisions",
+            "The user's latest keep/drop/move:<group> on each file of a board (tab_id) or of the given items.",
+            json!({"tab_id": tab, "items": items}),
+            &[],
+        ),
         tool("list_tabs", "Open tabs and which is in front.", json!({}), &[]),
         tool("focus_tab", "Bring a tab to the front.", json!({"tab_id": tab}), &["tab_id"]),
         tool("close_tab", "Close a tab.", json!({"tab_id": tab}), &["tab_id"]),
@@ -297,8 +368,8 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "play",
-            "Play a tab (the front one by default), optionally a member and a start time.",
-            json!({"tab_id": tab, "member": {"type": "integer"}, "at_s": {"type": "number"}}),
+            "Play a tab (the front one by default), optionally a board group, a member (index into the group's members then its rest) and a start time.",
+            json!({"tab_id": tab, "group": {"type": "string"}, "member": {"type": "integer"}, "at_s": {"type": "number"}}),
             &[],
         ),
         tool("stop", "Pause playback.", json!({}), &[]),

@@ -1,4 +1,5 @@
 mod app;
+mod board;
 mod config;
 mod decode;
 mod derive;
@@ -23,7 +24,7 @@ fn main() {
         setup: Some(|s: &mut App, w| s.setup(w)),
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),
-        min_size: Some((900.0, 560.0)),
+        min_size: Some((380.0, 520.0)),
         scenes: scenes::ALL,
         ..AppSpec::new("adeck", (1280.0, 800.0), App::new, ui::view)
     };

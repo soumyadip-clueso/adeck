@@ -15,6 +15,7 @@ use rune_kit::shell::TabDragState;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::board::{self, Board, Diff, Group};
 use crate::config::Config;
 use crate::derive::{self, Analysis, Earshot};
 use crate::feedback::{self, Row};
@@ -34,6 +35,8 @@ pub enum TabKind {
     Compare,
     Render,
     Run,
+    Board,
+    Diff,
 }
 
 /// What a tab is, as the session file and the tools see it.
@@ -61,6 +64,19 @@ pub struct TabSpec {
     pub order: Vec<usize>,
     #[serde(default)]
     pub revealed: bool,
+    /// Board tabs: the groups, and the one in focus (its members are `items`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<Board>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// Blind boards: groups already picked, so shown with their names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revealed_groups: Vec<String>,
+    /// Seeds a blind board's per-group shuffle.
+    #[serde(default)]
+    pub salt: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<Diff>,
 }
 
 fn yes() -> bool {
@@ -85,6 +101,12 @@ pub struct Tab {
     pub videos: Vec<rune::Player>,
     /// The member a blind pick chose, by member index, once picked.
     pub picked: Option<usize>,
+    /// Board tabs: groups whose ranked rest is unfolded.
+    pub more_open: HashSet<String>,
+    pub details_open: bool,
+    /// Board tabs: strips show just the sound, not the silence around it.
+    pub zoom_sound: bool,
+    pub move_open: bool,
 }
 
 impl Tab {
@@ -103,6 +125,10 @@ impl Tab {
             loading: false,
             videos: Vec::new(),
             picked: None,
+            more_open: HashSet::new(),
+            details_open: false,
+            zoom_sound: true,
+            move_open: false,
         }
     }
     pub fn id(&self) -> u64 {
@@ -110,6 +136,51 @@ impl Tab {
     }
     pub fn is_blind_hidden(&self) -> bool {
         self.spec.blind && !self.spec.revealed
+    }
+    pub fn board(&self) -> Option<&Board> {
+        self.spec.board.as_ref()
+    }
+    /// The group in focus on a board.
+    pub fn focused(&self) -> Option<&Group> {
+        let b = self.board()?;
+        self.spec.group.as_deref().and_then(|k| b.group(k)).or_else(|| b.sorted().first().copied())
+    }
+    /// Whether a board group hides who's who.
+    pub fn group_hidden(&self, key: &str) -> bool {
+        self.spec.blind && !self.spec.revealed_groups.iter().any(|g| g == key)
+    }
+    /// A board group's members in the order shown: shuffled while blind.
+    pub fn group_order(&self, g: &Group) -> Vec<usize> {
+        let n = g.members.len();
+        if !self.spec.blind {
+            return (0..n).collect();
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&(self.spec.salt, self.spec.id, &g.key), &mut h);
+        stable_shuffle(n, std::hash::Hasher::finish(&h))
+    }
+    /// A board member's label: its own, or its role and number; X, Y, Z while blind.
+    pub fn board_label(&self, g: &Group, idx: usize) -> String {
+        if idx < g.members.len() && self.group_hidden(&g.key) {
+            let pos = self.group_order(g).iter().position(|&m| m == idx).unwrap_or(idx);
+            return ((if pos < 3 { b'X' + pos as u8 } else { b'P' + (pos as u8 - 3) }) as char).to_string();
+        }
+        let all = g.playable();
+        let Some(m) = all.get(idx) else { return String::new() };
+        if let Some(l) = &m.label {
+            return l.clone();
+        }
+        if idx >= g.members.len() {
+            return format!("#{}", idx - g.members.len() + 1);
+        }
+        let role = if m.role.is_empty() { "take" } else { m.role.as_str() };
+        let n = g.members[..idx].iter().filter(|x| x.role == m.role).count() + 1;
+        let same = g.members.iter().filter(|x| x.role == m.role).count();
+        let mut r = role.to_owned();
+        if let Some(c) = r.get_mut(..1) {
+            c.make_ascii_uppercase();
+        }
+        if same > 1 { format!("{r} {n}") } else { r }
     }
     /// Members in the order they're shown.
     pub fn shown(&self) -> Vec<usize> {
@@ -135,6 +206,9 @@ pub struct Entry {
     pub earshot: HashMap<&'static str, Value>,
     pub earshot_busy: HashSet<&'static str>,
     pub sheet: Option<Pixels>,
+    /// Where the sound is, and its waveform drawn over just that stretch.
+    pub sound: Option<(f64, f64)>,
+    pub zoom: Pixels,
 }
 
 impl Entry {
@@ -149,6 +223,8 @@ impl Entry {
             earshot: HashMap::new(),
             earshot_busy: HashSet::new(),
             sheet: None,
+            sound: None,
+            zoom: Pixels::new(),
         };
         for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
             if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {
@@ -180,6 +256,9 @@ pub struct App {
     pub mixer: Mixer,
     pub feedback: feedback::Store,
     pub scores: HashMap<String, i64>,
+    /// The latest keep/drop/move on each item.
+    pub decisions: HashMap<String, String>,
+    earshot_ok: bool,
     waker: Option<Waker>,
     tx: Sender<Event>,
     rx: Receiver<Event>,
@@ -201,7 +280,10 @@ impl App {
         let (tx, rx) = channel();
         let headless = rune::tooling::headless_run().is_some() || std::env::var_os("ADECK_HEADLESS").is_some();
         let feedback = feedback::Store::new(crate::config::dir().join("feedback.jsonl"));
-        let scores = feedback::latest_scores(&feedback.read_all());
+        let rows = feedback.read_all();
+        let scores = feedback::latest_scores(&rows);
+        let decisions = board::decisions(&rows);
+        let earshot_ok = derive::on_path(&cfg.earshot);
         let mut jobs = Jobs::default();
         if let Some(p) = crate::jobs::log_path() {
             jobs.log_to(&p);
@@ -218,6 +300,8 @@ impl App {
             mixer: Mixer::default(),
             feedback,
             scores,
+            decisions,
+            earshot_ok,
             waker: None,
             tx,
             rx,
@@ -275,7 +359,24 @@ impl App {
         let id = self.next_tab;
         self.next_tab += 1;
         let order = if blind { shuffle(items.len(), id) } else { Vec::new() };
-        let spec = TabSpec { id, kind, items, label, blind, loudness_match, note: None, run, filter, order, revealed: false };
+        let spec = TabSpec {
+            id,
+            kind,
+            items,
+            label,
+            blind,
+            loudness_match,
+            note: None,
+            run,
+            filter,
+            order,
+            revealed: false,
+            board: None,
+            group: None,
+            revealed_groups: Vec::new(),
+            salt: feedback::now().to_bits(),
+            diff: None,
+        };
         self.tabs.push(Tab::new(spec));
         self.load_tab(id);
         self.focus(id);
@@ -286,7 +387,13 @@ impl App {
     /// Starts resolving and analysing everything a tab shows.
     fn load_tab(&mut self, id: u64) {
         let Some(t) = self.tab(id) else { return };
-        let (kind, items, run) = (t.spec.kind, t.spec.items.clone(), t.spec.run.clone());
+        let (kind, mut items, run) = (t.spec.kind, t.spec.items.clone(), t.spec.run.clone());
+        if kind == TabKind::Diff {
+            return;
+        }
+        if let Some(b) = t.board() {
+            items = b.items();
+        }
         if kind == TabKind::Run {
             if let Some(run) = run {
                 if let Some(t) = self.tab_mut(id) {
@@ -471,7 +578,7 @@ impl App {
     /// Puts the active tab's members on the mixer once they're all resolved.
     pub fn sync_mixer(&mut self) {
         let Some(t) = self.current() else { return };
-        if t.spec.kind == TabKind::Run || self.headless {
+        if matches!(t.spec.kind, TabKind::Run | TabKind::Diff) || self.headless {
             return;
         }
         let tab = t.id();
@@ -731,6 +838,250 @@ impl App {
         }
     }
 
+    // Boards.
+
+    /// Opens a board, or a diff when `diff` is given.
+    pub fn open_page(&mut self, label: Option<String>, board: Option<Board>, diff: Option<Diff>, blind: bool, loudness_match: bool) -> u64 {
+        let kind = if diff.is_some() { TabKind::Diff } else { TabKind::Board };
+        let id = self.open(kind, Vec::new(), label, blind, loudness_match, None, None);
+        if let Some(t) = self.tab_mut(id) {
+            t.spec.board = board;
+            t.spec.diff = diff;
+        }
+        self.refresh_board(id);
+        self.load_tab(id);
+        id
+    }
+
+    /// Puts a board's focused group on `items`, so playback, the loudness match and the strips
+    /// work as they do on a compare.
+    pub fn refresh_board(&mut self, tab: u64) {
+        let Some(t) = self.tab(tab) else { return };
+        let Some(g) = t.focused() else {
+            if let Some(t) = self.tab_mut(tab) {
+                t.spec.items.clear();
+            }
+            return;
+        };
+        let key = g.key.clone();
+        let ids: Vec<String> = g.playable().iter().map(|m| m.item.clone()).collect();
+        let Some(t) = self.tab_mut(tab) else { return };
+        t.spec.group = Some(key);
+        if t.spec.items != ids {
+            let was = t.spec.items.get(t.active).cloned();
+            t.active = was.and_then(|w| ids.iter().position(|i| *i == w)).unwrap_or(0);
+            t.spec.items = ids;
+            t.loop_secs = None;
+            t.move_open = false;
+            if self.active == Some(tab) {
+                self.sync_mixer();
+            }
+        }
+        self.want_measures();
+        self.dirty = true;
+    }
+
+    /// earshot `measure` for the focused group's files that have no measurements yet, for the
+    /// band, width and tail views.
+    fn want_measures(&mut self) {
+        if !self.earshot_ok || self.headless {
+            return;
+        }
+        let Some(t) = self.current() else { return };
+        let Some(g) = t.focused() else { return };
+        let want: Vec<String> = g.playable().iter().filter(|m| m.measure.is_none()).map(|m| m.item.clone()).collect();
+        for id in want {
+            if self.items.contains_key(&id) {
+                self.run_earshot(&id, Earshot::Measure);
+            }
+        }
+    }
+
+    pub fn focus_group(&mut self, key: &str) {
+        let Some(id) = self.active else { return };
+        if let Some(t) = self.tab_mut(id) {
+            if t.spec.group.as_deref() == Some(key) {
+                return;
+            }
+            t.spec.group = Some(key.to_owned());
+        }
+        self.refresh_board(id);
+    }
+
+    /// Plays one member of a group: the first press starts it, a press on another member while
+    /// playing switches at the same moment, a press on the one playing starts it again.
+    pub fn board_play(&mut self, key: &str, idx: usize) {
+        self.focus_group(key);
+        let Some(t) = self.current() else { return };
+        if idx >= t.spec.items.len() {
+            return;
+        }
+        let playing = self.mixer_is_for(t.id()) && self.mixer.is_playing();
+        let same = t.active == idx;
+        self.set_active_member(idx);
+        if !playing || same {
+            let from = self.view_start();
+            self.seek_secs(from);
+        }
+        self.sync_mixer();
+        self.mixer.play();
+    }
+
+    /// Where playback starts over: the start of the sound when zoomed to it, else the start.
+    pub fn view_start(&self) -> f64 {
+        self.view_range().map_or(0.0, |(a, _)| a)
+    }
+
+    /// The stretch of the active member a board's strips show: just the sound while zoomed.
+    pub fn view_range(&self) -> Option<(f64, f64)> {
+        let t = self.current()?;
+        let e = self.entry(t.spec.items.get(t.active)?)?;
+        let secs = e.analysis.as_ref()?.secs;
+        if !t.zoom_sound {
+            return Some((0.0, secs));
+        }
+        e.sound.or(Some((0.0, secs)))
+    }
+
+    pub fn board_replay(&mut self) {
+        let from = self.view_start();
+        self.seek_secs(from);
+        self.mixer.play();
+    }
+
+    /// The next or previous group, keeping playback going if it was.
+    pub fn board_step_group(&mut self, by: i64) {
+        let Some(t) = self.current() else { return };
+        let Some(b) = t.board() else { return };
+        let keys: Vec<String> = b.sorted().iter().map(|g| g.key.clone()).collect();
+        if keys.is_empty() {
+            return;
+        }
+        let at = t.spec.group.as_ref().and_then(|k| keys.iter().position(|x| x == k)).unwrap_or(0) as i64;
+        let next = (at + by).rem_euclid(keys.len() as i64) as usize;
+        let playing = self.mixer.is_playing();
+        let key = keys[next].clone();
+        self.focus_group(&key);
+        if playing {
+            let first = self.current().and_then(|t| t.focused().map(|g| t.group_order(g))).and_then(|o| o.first().copied()).unwrap_or(0);
+            self.board_play(&key, first);
+        }
+    }
+
+    /// The next or previous member of the focused group, in shown order, played.
+    pub fn board_step_member(&mut self, by: i64) {
+        let Some(t) = self.current() else { return };
+        let Some(g) = t.focused() else { return };
+        let mut order = t.group_order(g);
+        order.extend(g.members.len()..g.playable().len());
+        if order.is_empty() {
+            return;
+        }
+        let at = order.iter().position(|&m| m == t.active).unwrap_or(0) as i64;
+        let next = order[(at + by).rem_euclid(order.len() as i64) as usize];
+        let key = g.key.clone();
+        self.board_play(&key, next);
+    }
+
+    /// Loops what the strip shows (the sound, or the whole file), or stops looping.
+    pub fn board_toggle_loop(&mut self) {
+        if self.current().is_some_and(|t| t.loop_secs.is_some()) {
+            self.set_loop(None);
+        } else if let Some(r) = self.view_range() {
+            self.set_loop(Some(r));
+        }
+    }
+
+    pub fn toggle_zoom(&mut self) {
+        if let Some(t) = self.current_mut() {
+            t.zoom_sound ^= true;
+        }
+    }
+
+    /// Records keep, drop or `move:<group>` for one file.
+    pub fn decide(&mut self, id: &str, value: &str) {
+        let Some(t) = self.current() else { return };
+        let note = t.note.text.trim().to_owned();
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "decision".into(), items: vec![id.to_owned()], value: Value::from(value), note, blind: false, reveal_map: None };
+        if self.write(row) {
+            self.decisions.insert(id.to_owned(), value.to_owned());
+            if let Some(t) = self.current_mut() {
+                t.note = TextEdit::new("");
+                t.move_open = false;
+            }
+        }
+    }
+
+    /// Decides on the member you're hearing.
+    pub fn decide_active(&mut self, value: &str) {
+        let Some(id) = self.current().and_then(|t| t.spec.items.get(t.active).cloned()) else { return };
+        self.decide(&id, value);
+    }
+
+    /// Picks the member you're hearing as the best of its group, revealing a blind group.
+    pub fn board_pick(&mut self) {
+        let Some(t) = self.current() else { return };
+        let Some(g) = t.focused() else { return };
+        let Some(picked) = t.spec.items.get(t.active).cloned() else { return };
+        let items: Vec<String> = g.members.iter().map(|m| m.item.clone()).collect();
+        let hidden = t.group_hidden(&g.key);
+        let reveal = hidden.then(|| Value::Object((0..g.members.len()).map(|i| (t.board_label(g, i), Value::String(g.members[i].item.clone()))).collect()));
+        let key = g.key.clone();
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "pick".into(), items, value: Value::String(picked), note: t.note.text.trim().to_owned(), blind: t.spec.blind, reveal_map: reveal };
+        if self.write(row)
+            && let Some(t) = self.current_mut()
+        {
+            if !t.spec.revealed_groups.contains(&key) {
+                t.spec.revealed_groups.push(key);
+            }
+            t.note = TextEdit::new("");
+            self.dirty = true;
+        }
+    }
+
+    pub fn toggle_more(&mut self, key: &str) {
+        if let Some(t) = self.current_mut()
+            && !t.more_open.remove(key)
+        {
+            t.more_open.insert(key.to_owned());
+        }
+    }
+
+    /// Adds or replaces groups (boards) or rows (diffs) by key, while the tab is open.
+    pub fn upsert(&mut self, tab: u64, a: &Value) -> Result<Value, String> {
+        let t = self.tab_mut(tab).ok_or_else(|| format!("No tab {tab}."))?;
+        let mut out = json!({ "tab_id": tab });
+        if let Some(d) = t.spec.diff.as_mut() {
+            let rows: Vec<board::DiffRow> = serde_json::from_value(a.get("rows").cloned().unwrap_or(json!([]))).map_err(|e| format!("rows: {e}"))?;
+            if let Some(m) = a.get("metrics") {
+                d.metrics = serde_json::from_value(m.clone()).map_err(|e| format!("metrics: {e}"))?;
+            }
+            let n = rows.len();
+            let fresh = board::upsert(&mut d.rows, rows, |r| &r.key);
+            out["added"] = json!(fresh);
+            out["replaced"] = json!(n - fresh);
+            out["rows"] = json!(d.rows.len());
+        } else {
+            let b = t.spec.board.get_or_insert_with(Board::default);
+            let groups: Vec<Group> = serde_json::from_value(a.get("groups").cloned().unwrap_or(json!([]))).map_err(|e| format!("groups: {e}"))?;
+            if let Some(m) = a.get("metrics") {
+                b.metrics = serde_json::from_value(m.clone()).map_err(|e| format!("metrics: {e}"))?;
+            }
+            let n = groups.len();
+            let fresh = board::upsert(&mut b.groups, groups, |g| &g.key);
+            if let Some(keys) = a.get("remove").and_then(Value::as_array) {
+                b.groups.retain(|g| !keys.iter().any(|k| k.as_str() == Some(g.key.as_str())));
+            }
+            out["added"] = json!(fresh);
+            out["replaced"] = json!(n - fresh);
+            out["groups"] = json!(b.groups.len());
+        }
+        self.dirty = true;
+        self.refresh_board(tab);
+        self.load_tab(tab);
+        Ok(out)
+    }
+
     // The frame.
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
@@ -780,6 +1131,7 @@ impl App {
                         }
                         if self.active == Some(tab) {
                             self.sync_mixer();
+                            self.want_measures();
                         }
                     }
                     Err(e) => {
@@ -800,6 +1152,13 @@ impl App {
                         let (w, h) = (2000usize, 160usize);
                         entry.wave.set(w as u32, h as u32, crate::ui::widgets::paint_wave(&a.envelope, w, h));
                         entry.spec.set(a.spec_w, a.spec_h, spec);
+                        let (lo, hi) = board::sound_range(&a.envelope, a.secs, -45.0);
+                        entry.sound = Some((lo, hi));
+                        let n = a.envelope.len();
+                        let (ca, cb) = ((lo / a.secs * n as f64) as usize, ((hi / a.secs * n as f64).ceil() as usize).min(n));
+                        if cb > ca {
+                            entry.zoom.set(600, 96, crate::ui::widgets::paint_wave(&a.envelope[ca..cb], 600, 96));
+                        }
                         entry.analysis = Some(a);
                         if self.current().is_some_and(|t| t.spec.items.contains(&id)) {
                             self.apply_trims();
@@ -895,6 +1254,13 @@ impl App {
     /// Blind on: shuffle and hide. Off (only before a pick): show names again.
     pub fn toggle_blind(&mut self) {
         let Some(t) = self.current_mut() else { return };
+        if t.spec.board.is_some() {
+            t.spec.blind ^= true;
+            t.spec.salt = feedback::now().to_bits();
+            t.spec.revealed_groups.clear();
+            self.dirty = true;
+            return;
+        }
         if t.spec.revealed {
             return;
         }
@@ -1006,6 +1372,49 @@ impl App {
                 let id = self.open(TabKind::Run, Vec::new(), label, false, true, Some(run), s("filter"));
                 Ok(self.tab_json(id))
             }
+            "open_board" | "open_diff" => {
+                let blind = a.get("blind").and_then(Value::as_bool).unwrap_or(false);
+                let lm = a.get("loudness_match").and_then(Value::as_bool).unwrap_or(true);
+                let (b, d) = if tool == "open_diff" {
+                    let d: Diff = serde_json::from_value(json!({
+                        "a": a.get("a").cloned().unwrap_or(json!("A")), "b": a.get("b").cloned().unwrap_or(json!("B")),
+                        "metrics": a.get("metrics").cloned().unwrap_or(json!([])), "rows": a.get("rows").cloned().unwrap_or(json!([])),
+                    }))
+                    .map_err(|e| format!("Couldn't read the diff: {e}"))?;
+                    (None, Some(d))
+                } else {
+                    let b: Board = serde_json::from_value(json!({
+                        "groups": a.get("groups").cloned().unwrap_or(json!([])), "metrics": a.get("metrics").cloned().unwrap_or(json!([])),
+                        "choices": a.get("choices").cloned().unwrap_or(json!([])), "move_to": a.get("move_to").cloned().unwrap_or(json!([])),
+                    }))
+                    .map_err(|e| format!("Couldn't read the board: {e}"))?;
+                    (Some(b), None)
+                };
+                let id = self.open_page(s("label"), b, d, blind, lm);
+                if let Some(n) = s("note") {
+                    self.annotate(id, n);
+                }
+                Ok(self.tab_json(id))
+            }
+            "board_upsert" => {
+                let id = tab_arg().ok_or("tab_id is required")?;
+                self.upsert(id, a)
+            }
+            "get_decisions" => {
+                let mut items = ids("items");
+                if let Some(id) = tab_arg() {
+                    let t = self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
+                    items.extend(t.board().map(Board::items).unwrap_or_else(|| t.spec.items.clone()));
+                }
+                let rows = self.feedback.read_all();
+                let mut out = serde_json::Map::new();
+                for r in rows.iter().filter(|r| r.kind == "decision") {
+                    if let Some(i) = r.items.first().filter(|i| items.is_empty() || items.contains(i)) {
+                        out.insert(i.clone(), json!({ "decision": r.value, "note": r.note, "ts": r.ts }));
+                    }
+                }
+                Ok(json!({ "count": out.len(), "decisions": out }))
+            }
             "list_tabs" => Ok(json!({ "active": self.active, "tabs": self.tabs.iter().map(|t| self.tab_json(t.id())).collect::<Vec<_>>() })),
             "focus_tab" => {
                 let id = tab_arg().ok_or("tab_id is required")?;
@@ -1029,6 +1438,12 @@ impl App {
                 let id = tab_arg().or(self.active).ok_or("No tab is open.")?;
                 self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
                 self.focus(id);
+                if let Some(g) = s("group") {
+                    if self.tab(id).and_then(Tab::board).and_then(|b| b.group(&g)).is_none() {
+                        return Err(format!("No group {g} on tab {id}."));
+                    }
+                    self.focus_group(&g);
+                }
                 if let Some(m) = a.get("member").and_then(Value::as_u64) {
                     self.set_active_member(m as usize);
                 }
@@ -1133,6 +1548,13 @@ impl App {
             "loop": t.loop_secs,
             "note": t.spec.note,
             "error": t.error,
+            "board": t.board().map(|b| json!({
+                "groups": b.groups.len(),
+                "focused": t.spec.group,
+                "tally": b.tally().into_iter().map(|(k, n)| (k, Value::from(n))).collect::<serde_json::Map<String, Value>>(),
+                "decided": b.items().iter().filter(|i| self.decisions.contains_key(*i)).count(),
+            })),
+            "diff": t.spec.diff.as_ref().map(|d| json!({ "a": d.a, "b": d.b, "rows": d.rows.len() })),
         })
     }
 
@@ -1141,6 +1563,21 @@ impl App {
         match self.current() {
             None => "No tabs. Ask your LLM to open something, or drop files here.".into(),
             Some(t) if t.spec.kind == TabKind::Run => format!("{} items", t.rows.len()),
+            Some(t) if t.spec.kind == TabKind::Diff => t.spec.diff.as_ref().map_or_else(String::new, |d| format!("{} vs {} · {} rows", d.a, d.b, d.rows.len())),
+            Some(t) if t.spec.kind == TabKind::Board => {
+                let b = t.board().cloned().unwrap_or_default();
+                let all = b.items();
+                let ready = all.iter().filter(|i| self.items.get(*i).is_some_and(|e| e.analysis.is_some())).count();
+                let decided = all.iter().filter(|i| self.decisions.contains_key(*i)).count();
+                let mut s = format!("{} groups · {} files", b.groups.len(), all.len());
+                if ready < all.len() {
+                    s += &format!(" · analysing {ready}/{}", all.len());
+                }
+                if decided > 0 {
+                    s += &format!(" · {decided} decided");
+                }
+                s
+            }
             Some(t) => {
                 let ready = t.spec.items.iter().filter(|i| self.items.get(*i).is_some_and(|e| e.analysis.is_some())).count();
                 if ready < t.spec.items.len() { format!("Analysing {}/{}…", ready, t.spec.items.len()) } else { format!("{} file{}", ready, if ready == 1 { "" } else { "s" }) }
@@ -1188,6 +1625,19 @@ pub fn read_tool(cfg: &Config, scores: &HashMap<String, i64>, tool: &str, a: &Va
         }
         other => Err(format!("No tool {other}.")),
     }
+}
+
+/// A shuffle that depends only on its seed.
+fn stable_shuffle(n: usize, seed: u64) -> Vec<usize> {
+    let mut v: Vec<usize> = (0..n).collect();
+    let mut x = seed | 1;
+    for i in (1..n).rev() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        v.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+    v
 }
 
 /// A fixed shuffle for a blind tab, seeded by its id so a restored session keeps it.
@@ -1254,6 +1704,11 @@ mod tests {
             filter: None,
             order: vec![2, 0, 1],
             revealed: false,
+            board: None,
+            group: None,
+            revealed_groups: Vec::new(),
+            salt: 0,
+            diff: None,
         };
         let t = Tab::new(spec);
         assert_eq!(t.member_label(2), "X");

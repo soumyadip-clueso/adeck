@@ -8,12 +8,12 @@ use crate::app::{App, TabKind};
 
 type Scene = (&'static str, fn(&mut App));
 
-pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run)];
+pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff)];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
     let dir = std::env::temp_dir().join("adeck-fixtures/run-a");
-    if dir.join("click-120.json").is_file() {
+    if dir.join("tick.wav").is_file() {
         return dir;
     }
     let _ = std::fs::create_dir_all(&dir);
@@ -34,6 +34,8 @@ pub fn fixtures() -> PathBuf {
         let click = if beat < 0.02 { (t * if down { 2000.0 } else { 1200.0 } * std::f32::consts::TAU).sin() * (1.0 - beat / 0.02) * 0.8 } else { 0.0 };
         click + (t * 110.0 * std::f32::consts::TAU).sin() * 0.15
     });
+    // A one-shot: 60 ms of click in a second of silence.
+    write_wav(&dir.join("tick.wav"), rate, 1.0, |t| if (0.42..0.48).contains(&t) { (t * 3000.0 * std::f32::consts::TAU).sin() * (1.0 - (t - 0.42) / 0.06) * 0.7 } else { 0.0 });
     let meta = |name: &str, model: &str, mood: &str, seed: u32, extra: serde_json::Value| {
         let mut v =
             serde_json::json!({"id": name, "model": model, "mood": mood, "seed": seed, "prompt": format!("{mood} test sound, fixture"), "steps": 8, "cfg": 1.0, "flags": []});
@@ -123,6 +125,65 @@ fn run(s: &mut App) {
     s.settle_now();
 }
 
+/// A board shaped like the best-picks page: two categories, picks, a before, a ranked rest.
+pub fn board_args() -> serde_json::Value {
+    let [a, b, w, c, tick] = <[String; 5]>::try_from(ids(&["tone-a", "tone-b", "whoosh", "click-120", "tick"])).unwrap_or_default();
+    let target = serde_json::json!({"target_bands_db": {"sub": -30.0, "low": -12.0, "lowmid": -6.0, "mid": -14.0, "presence": -30.0}, "target_correlation": 0.4, "target_decay_ms": 300.0});
+    let measure = |sub: f64, corr: f64, decay: f64| serde_json::json!({"bands_db": {"sub": sub, "low": -10.0, "lowmid": -8.0, "mid": -15.0, "presence": -33.0}, "correlation": corr, "decay_ms": decay});
+    serde_json::json!({
+        "label": "Best picks",
+        "choices": ["keep", "drop"],
+        "move_to": ["whoosh-soft", "ui-click"],
+        "metrics": [{"key": "vibe", "better": "higher"}, {"key": "shape", "better": "lower"}],
+        "groups": [
+            {"key": "ui-click", "title": "UI click", "subtitle": "528 searches", "sort": 528, "chip": {"text": "Close, still a bit synthetic", "tone": "close"}, "target": target,
+             "members": [
+                {"item": tick, "role": "pick", "numbers": {"vibe": 0.97, "shape": 0.62, "z": 2.4, "p_real": 0.55}, "meta": {"prompt": "crisp ui click", "model": "sa3-small", "seed": 11, "chain": "v2"}, "measure": measure(-28.0, 0.95, 120.0)},
+                {"item": c, "role": "before", "numbers": {"vibe": 0.81}, "meta": {"chain": "raw"}},
+             ]},
+            {"key": "whoosh-soft", "title": "Soft whoosh", "subtitle": "846 searches", "sort": 846, "chip": {"text": "Sounds like the pack", "tone": "good"}, "target": target,
+             "members": [
+                {"item": w, "role": "pick", "numbers": {"vibe": 1.05, "shape": 0.51, "z": 3.2, "p_real": 0.93}, "chip": {"text": "good", "tone": "good"}, "meta": {"prompt": "soft airy whoosh", "model": "sa3-small", "seed": 7, "chain": "v2"}, "measure": measure(-26.0, 0.68, 725.0)},
+                {"item": a, "role": "pick", "numbers": {"vibe": 1.01, "shape": 0.63}},
+                {"item": b, "role": "before", "numbers": {"vibe": 0.89, "shape": 1.31}, "meta": {"chain": "raw"}},
+             ],
+             "more": [{"item": c, "numbers": {"vibe": 0.86, "shape": 1.1}}]}
+        ]
+    })
+}
+
+fn board(s: &mut App) {
+    reset(s);
+    let _ = s.call("open_board", &board_args());
+    s.settle_now();
+}
+
+fn board_blind(s: &mut App) {
+    reset(s);
+    let mut a = board_args();
+    a["blind"] = serde_json::Value::Bool(true);
+    let _ = s.call("open_board", &a);
+    s.settle_now();
+}
+
+fn diff(s: &mut App) {
+    reset(s);
+    let [a, b] = <[String; 2]>::try_from(ids(&["tone-a", "tone-b"])).unwrap_or_default();
+    let _ = s.call(
+        "open_diff",
+        &serde_json::json!({
+            "a": "chain v1", "b": "chain v2", "label": "v1 vs v2",
+            "metrics": [{"key": "vibe", "better": "higher"}, {"key": "shape", "better": "lower"}, {"key": "z", "better": "higher"}, {"key": "p_real", "label": "pro-made", "better": "higher"}],
+            "rows": [
+                {"key": "whoosh-soft", "title": "Soft whoosh", "sort": 846, "a": {"vibe": 1.05, "shape": 0.593, "z": 3.11, "p_real": 0.921}, "b": {"vibe": 1.054, "shape": 0.506, "z": 3.16, "p_real": 0.927}, "items": {"a": a, "b": b}},
+                {"key": "impact-cinematic", "title": "Cinematic impact", "sort": 598, "a": {"vibe": 0.91, "shape": 0.8, "z": 2.1, "p_real": 0.4}, "b": {"vibe": 0.88, "shape": 0.7, "z": 2.4, "p_real": 0.38}},
+                {"key": "ui-click", "title": "UI click", "sort": 528, "a": {"vibe": 0.97, "shape": 0.62}, "b": {"vibe": 0.97, "shape": 0.64}}
+            ]
+        }),
+    );
+    s.settle_now();
+}
+
 /// An app on an empty config home, for tests.
 #[cfg(test)]
 pub fn test_app() -> App {
@@ -206,9 +267,106 @@ mod tests {
     }
 
     #[test]
+    fn a_board_sorts_groups_focuses_the_first_and_plays_its_members() {
+        let mut rt = rt(board);
+        let t = rt.state.current().unwrap();
+        assert_eq!(t.spec.kind, TabKind::Board);
+        // Sorted by searches: whoosh-soft (846) first, so it's in focus and its members (and rest) play.
+        assert_eq!(t.spec.group.as_deref(), Some("whoosh-soft"));
+        assert_eq!(t.spec.items.len(), 4);
+        for key in ["group-whoosh-soft", "group-ui-click", "tile-whoosh-soft-0", "bwave", "bspec", "analysis", "decide"] {
+            assert!(rt.find(key).is_some(), "{key}");
+        }
+        rt.state.board_play("ui-click", 0);
+        let t = rt.state.current().unwrap();
+        assert_eq!(t.spec.group.as_deref(), Some("ui-click"));
+        assert_eq!(t.active, 0);
+        // The one-shot is zoomed to its 60 ms of sound.
+        let e = rt.state.entry(&t.spec.items[0]).unwrap();
+        let (a, b) = e.sound.unwrap();
+        assert!(a > 0.38 && b < 0.52, "{a}..{b}");
+        rt.state.board_step_group(1);
+        assert_eq!(rt.state.current().unwrap().spec.group.as_deref(), Some("whoosh-soft"));
+    }
+
+    #[test]
+    fn board_groups_and_diff_rows_upsert_live() {
+        let mut rt = rt(board);
+        let id = rt.state.active.unwrap();
+        let tick = ids(&["tick"]).remove(0);
+        let r = rt.state.call("board_upsert", &serde_json::json!({"tab_id": id, "groups": [
+            {"key": "pop", "sort": 9999, "members": [{"item": tick, "role": "pick"}]},
+            {"key": "ui-click", "sort": 1, "chip": {"text": "good now", "tone": "good"}, "members": [{"item": tick}]}
+        ]}))
+        .unwrap();
+        assert_eq!((r["added"].as_u64(), r["replaced"].as_u64(), r["groups"].as_u64()), (Some(1), Some(1), Some(3)));
+        let b = rt.state.current().unwrap().board().unwrap();
+        assert_eq!(b.sorted()[0].key, "pop");
+        assert_eq!(b.tally(), vec![("good".to_owned(), 2)]);
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("group-pop").is_some());
+
+        let mut rt = super::tests::rt(diff);
+        let id = rt.state.active.unwrap();
+        rt.state.call("board_upsert", &serde_json::json!({"tab_id": id, "rows": [{"key": "pop", "a": {"vibe": 0.5}, "b": {"vibe": 0.7}}]})).unwrap();
+        let d = rt.state.current().unwrap().spec.diff.clone().unwrap();
+        assert_eq!(d.rows.len(), 4);
+        assert_eq!(d.tally()[0].0, 2);
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("drow-pop").is_some() && rt.find("diff-tally").is_some());
+    }
+
+    #[test]
+    fn decisions_persist_and_come_back_over_the_tool() {
+        let mut rt = rt(board);
+        let id = rt.state.active.unwrap();
+        rt.state.decide_active("drop");
+        let first = rt.state.current().unwrap().spec.items[0].clone();
+        rt.state.decide(&first, "move:ui-click");
+        let v = rt.state.call("get_decisions", &serde_json::json!({"tab_id": id})).unwrap();
+        assert_eq!(v["decisions"][&first]["decision"], "move:ui-click");
+        // A fresh app reads them back from disk.
+        assert_eq!(test_app().decisions.get(&first).map(String::as_str), Some("move:ui-click"));
+    }
+
+    #[test]
+    fn a_blind_board_hides_roles_until_the_group_is_picked() {
+        let mut rt = rt(board_blind);
+        let t = rt.state.current().unwrap();
+        let g = t.focused().unwrap().clone();
+        let labels: Vec<String> = (0..g.members.len()).map(|i| t.board_label(&g, i)).collect();
+        let mut sorted = labels.clone();
+        sorted.sort();
+        assert_eq!(sorted, ["X", "Y", "Z"]);
+        assert!(rt.find("analysis").is_none());
+        rt.state.board_pick();
+        let t = rt.state.current().unwrap();
+        assert!(!t.group_hidden(&g.key));
+        assert_eq!(t.board_label(&g, 0), "Pick 1");
+        let row = rt.state.feedback.read_all().pop().unwrap();
+        assert_eq!(row.reveal_map.unwrap().as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_board_fits_a_phone_width_without_spilling() {
+        let mut app = test_app();
+        board(&mut app);
+        let mut rt = Runtime::new(app, crate::ui::view, (390.0, 760.0), Env { system_dark: false, scale: 1.0 });
+        for _ in 0..20 {
+            rt.frame(1.0 / 60.0);
+        }
+        for key in ["tile-whoosh-soft-0", "tile-whoosh-soft-2", "analysis", "details", "board-head"] {
+            let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key}"));
+            assert!(r[0] >= 0.0 && r[0] + r[2] <= 390.5, "{key} spills: {r:?}");
+        }
+    }
+
+    #[test]
     fn a_run_tab_lists_every_fixture() {
         let rt = rt(run);
         let t = rt.state.current().unwrap();
-        assert_eq!(t.rows.len(), 4, "{:?}", t.rows);
+        assert_eq!(t.rows.len(), 5, "{:?}", t.rows);
     }
 }
