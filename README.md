@@ -58,7 +58,7 @@ Or in a project's `.mcp.json`:
 |---|---|
 | `list_runs`, `list_items`, `get_item` | Find runs and items; everything known about one item |
 | `open_single`, `open_compare`, `open_render`, `open_run` | Open a tab; each returns its `tab_id` |
-| `list_tabs`, `focus_tab`, `close_tab`, `annotate_tab` | Manage tabs; pin markdown on what to listen for |
+| `list_tabs`, `focus_tab`, `close_tab`, `annotate_tab` | Manage tabs (`list_tabs` is one line per tab; give a `tab_id` for its members); pin markdown on what to listen for |
 | `play`, `stop`, `set_loop` | Playback |
 | `screenshot_tab` | A PNG of a tab as you see it |
 | `get_feedback`, `wait_for_feedback` | Your verdicts |
@@ -69,7 +69,7 @@ Or in a project's `.mcp.json`:
 | `get_decisions` | Your latest keep / drop / move on each file of a board |
 | `get_selection` | What you pointed the agent at, newest first |
 
-Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
+Replies are compact JSON with nulls left out, and shared shapes (board groups, diff rows) are spelled out once, so the tools stay cheap in an agent's context. Item ids are absolute paths, `run:<run>/<path>`, `ref:<path>` (the reference pack) or `s3://` URLs.
 
 ## Screenshots and sharing
 

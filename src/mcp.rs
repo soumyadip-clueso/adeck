@@ -151,9 +151,18 @@ fn rpc(m: &Value, ctx: &Ctx) -> Option<Value> {
 fn text_result(v: Result<Value, String>) -> Value {
     match v {
         Ok(v) => {
-            json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}], "structuredContent": if v.is_object() { v.clone() } else { json!({"result": v}) }})
+            json!({"content": [{"type": "text", "text": serde_json::to_string(&lean(v)).unwrap_or_default()}]})
         }
         Err(e) => json!({"content": [{"type": "text", "text": e}], "isError": true}),
+    }
+}
+
+/// Replies are read by a model: compact JSON with the nulls left out, since every byte is a token.
+fn lean(v: Value) -> Value {
+    match v {
+        Value::Object(o) => Value::Object(o.into_iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k, lean(v))).collect()),
+        Value::Array(a) => Value::Array(a.into_iter().map(lean).collect()),
+        v => v,
     }
 }
 
@@ -279,6 +288,20 @@ fn board_groups() -> Value {
     }, "required": ["key"]}})
 }
 
+// open_board and open_diff carry the full shapes; the tools that take the same thing say so instead
+// of repeating them, which keeps tools/list small.
+fn same_groups() -> Value {
+    json!({"type": "array", "items": {"type": "object"}, "description": "Groups, the same shape as open_board's."})
+}
+
+fn same_metrics() -> Value {
+    json!({"type": "array", "items": {"type": "object"}, "description": "Same shape as open_board's metrics."})
+}
+
+fn same_rows() -> Value {
+    json!({"type": "array", "items": {"type": "object"}, "description": "Diff rows, the same shape as open_diff's."})
+}
+
 fn diff_rows() -> Value {
     json!({"type": "array", "items": {"type": "object", "properties": {
         "key": {"type": "string"}, "title": {"type": "string"}, "sort": {"type": "number"},
@@ -354,7 +377,7 @@ pub fn tools() -> Vec<Value> {
             "open_pads",
             "Open sound pads for one-shot effects: each file is a big button that plays it from the top on a click or its key (1-9, 0, then Q-P, A-L), with 0-3 score dots and keep/drop. No strips unless the user asks for them. Give items (one row of pads) or groups (a row per category, same shape as open_board). board_upsert adds more.",
             json!({
-                "label": {"type": "string"}, "note": note, "items": items, "groups": board_groups(), "metrics": metrics(),
+                "label": {"type": "string"}, "note": note, "items": items, "groups": same_groups(), "metrics": same_metrics(),
                 "choices": {"type": "array", "items": {"type": "string"}}, "move_to": {"type": "array", "items": {"type": "string"}},
                 "blind": {"type": "boolean"}, "loudness_match": {"type": "boolean"}
             }),
@@ -363,7 +386,7 @@ pub fn tools() -> Vec<Value> {
         tool(
             "board_upsert",
             "Add groups to an open board, or replace them by key, while the user watches; or rows to an open diff. remove drops groups by key.",
-            json!({"tab_id": tab, "groups": board_groups(), "rows": diff_rows(), "metrics": metrics(), "remove": {"type": "array", "items": {"type": "string"}}}),
+            json!({"tab_id": tab, "groups": same_groups(), "rows": same_rows(), "metrics": same_metrics(), "remove": {"type": "array", "items": {"type": "string"}}}),
             &["tab_id"],
         ),
         tool(
@@ -380,11 +403,11 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "get_selection",
-            "What the user pointed you at: they double-click a strip, tile or member (or press S / Send to agent) and it lands here with the tab, group, member, item id (null while blind), the loop or zoomed range and the playhead, plus any note. Newest first. wait_for_feedback also wakes on one.",
+            "What the user pointed you at: they double-click a strip, tile or member (or press S / Send to agent) and it lands here with the tab, group, member, item id (absent while blind), the loop or zoomed range and the playhead, plus any note. Newest first. wait_for_feedback also wakes on one.",
             json!({"limit": {"type": "integer", "description": "Default 1."}, "since": {"type": "number"}}),
             &[],
         ),
-        tool("list_tabs", "Open tabs and which is in front.", json!({}), &[]),
+        tool("list_tabs", "Open tabs, one line each, and which is in front. Pass tab_id for one tab in full (members, ids, loudness).", json!({"tab_id": tab}), &[]),
         tool("focus_tab", "Bring a tab to the front.", json!({"tab_id": tab}), &["tab_id"]),
         tool("close_tab", "Close a tab.", json!({"tab_id": tab}), &["tab_id"]),
         tool(

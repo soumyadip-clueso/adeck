@@ -2119,7 +2119,10 @@ impl App {
                 }
                 Ok(json!({ "count": out.len(), "decisions": out }))
             }
-            "list_tabs" => Ok(json!({ "active": self.active, "tabs": self.tabs.iter().map(|t| self.tab_json(t.id())).collect::<Vec<_>>() })),
+            "list_tabs" => match tab_arg() {
+                Some(id) => self.tab(id).map(|_| self.tab_json(id)).ok_or_else(|| format!("No tab {id}.")),
+                None => Ok(json!({ "active": self.active, "tabs": self.tabs.iter().map(|t| self.tab_brief(t)).collect::<Vec<_>>() })),
+            },
             "focus_tab" => {
                 let id = tab_arg().ok_or("tab_id is required")?;
                 self.tab(id).ok_or_else(|| format!("No tab {id}."))?;
@@ -2238,6 +2241,21 @@ impl App {
             t.spec.note = (!md.trim().is_empty()).then_some(md);
         }
         self.dirty = true;
+    }
+
+    /// One line about a tab for list_tabs: enough to pick it, not its members.
+    pub fn tab_brief(&self, t: &Tab) -> Value {
+        let mut v = json!({ "tab_id": t.id(), "kind": t.spec.kind, "label": crate::ui::tab_title(self, t) });
+        match (t.board(), t.spec.kind) {
+            (Some(b), _) => v["groups"] = json!(b.groups.len()),
+            (None, TabKind::Run) => v["rows"] = json!(t.rows.len()),
+            (None, TabKind::Shared | TabKind::Diff) => {}
+            _ => v["files"] = json!(t.spec.items.len()),
+        }
+        if t.spec.blind {
+            v["blind"] = json!(true);
+        }
+        v
     }
 
     pub fn tab_json(&self, id: u64) -> Value {
