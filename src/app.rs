@@ -236,6 +236,10 @@ pub struct Entry {
     /// The waveform redrawn for a zoomed view, and which view (start and end ms, width).
     pub view_px: Pixels,
     pub view_key: std::cell::Cell<(u64, u64, u32, u32)>,
+    /// The cached spectrogram picture, and its LED redraw for the view on screen.
+    pub spec_raw: std::cell::RefCell<Vec<u8>>,
+    pub spec_view: Pixels,
+    pub spec_key: std::cell::Cell<(u64, u64, u32, u32)>,
 }
 
 impl Entry {
@@ -246,9 +250,8 @@ impl Entry {
             return;
         }
         let Some(a) = &self.analysis else { return };
-        self.wave.set(2000, 160, crate::ui::widgets::paint_wave(&a.envelope, 2000, 160));
         if let Some(rgba) = derive::cached_spec(&self.item.path, a) {
-            self.spec.set(a.spec_w, a.spec_h, rgba);
+            *self.spec_raw.borrow_mut() = rgba;
         }
         self.full.set(true);
     }
@@ -260,6 +263,9 @@ impl Entry {
             self.spec.set(1, 1, vec![0; 4]);
             self.view_px.set(1, 1, vec![0; 4]);
             self.view_key.set((0, 0, 0, 0));
+            self.spec_raw.borrow_mut().clear();
+            self.spec_view.set(1, 1, vec![0; 4]);
+            self.spec_key.set((0, 0, 0, 0));
         }
     }
 
@@ -280,6 +286,9 @@ impl Entry {
             full: std::cell::Cell::new(false),
             view_px: Pixels::new(),
             view_key: std::cell::Cell::new((0, 0, 0, 0)),
+            spec_raw: std::cell::RefCell::new(Vec::new()),
+            spec_view: Pixels::new(),
+            spec_key: std::cell::Cell::new((0, 0, 0, 0)),
         };
         for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
             if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {
@@ -334,8 +343,14 @@ pub struct App {
     /// The new-tab menu, and the runs it offers (listed when it opens).
     pub new_menu: bool,
     pub menu_runs: Vec<String>,
-    /// The detail sheet's width, kept across tabs.
+    /// The pane's width, kept across tabs.
     pub sheet_w: f32,
+    /// Where the pane sits: left, right, or hidden to a tab on the edge.
+    pub pane: crate::ui::px::Dock,
+    /// Which of the pane's sections is showing (META, EARSHOT, ...), by its label.
+    pub pane_tab: String,
+    /// Where the pane was before it was hidden, so `\\` brings it back there.
+    pub pane_last: crate::ui::px::Dock,
     /// The window's size and theme as last drawn, for screenshots.
     pub win: std::cell::Cell<(f32, f32, bool)>,
     pub shooting: bool,
@@ -394,7 +409,10 @@ impl App {
             toast: cfg_error.map(|e| (e, true)),
             new_menu: false,
             menu_runs: Vec::new(),
-            sheet_w: 480.0,
+            sheet_w: 360.0,
+            pane: crate::ui::px::Dock::Right,
+            pane_tab: String::new(),
+            pane_last: crate::ui::px::Dock::Right,
             win: std::cell::Cell::new((1280.0, 800.0, true)),
             shooting: false,
             palette: None,
@@ -1083,7 +1101,16 @@ impl App {
     /// Scores one file (0-3) without it having to be the one you're hearing.
     pub fn score_item(&mut self, id: &str, value: i64) {
         let Some(t) = self.current() else { return };
-        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "score".into(), items: vec![id.to_owned()], value: Value::from(value), note: t.note.text.trim().to_owned(), blind: t.spec.blind, reveal_map: None };
+        let row = Row {
+            ts: feedback::now(),
+            tab_id: t.id(),
+            kind: "score".into(),
+            items: vec![id.to_owned()],
+            value: Value::from(value),
+            note: t.note.text.trim().to_owned(),
+            blind: t.spec.blind,
+            reveal_map: None,
+        };
         if self.write(row) {
             self.scores.insert(id.to_owned(), value);
             if let Some(t) = self.current_mut() {
@@ -1204,7 +1231,16 @@ impl App {
         let hidden = t.group_hidden(&g.key);
         let reveal = hidden.then(|| Value::Object((0..g.members.len()).map(|i| (t.board_label(g, i), Value::String(g.members[i].item.clone()))).collect()));
         let key = g.key.clone();
-        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "pick".into(), items, value: Value::String(picked), note: t.note.text.trim().to_owned(), blind: t.spec.blind, reveal_map: reveal };
+        let row = Row {
+            ts: feedback::now(),
+            tab_id: t.id(),
+            kind: "pick".into(),
+            items,
+            value: Value::String(picked),
+            note: t.note.text.trim().to_owned(),
+            blind: t.spec.blind,
+            reveal_map: reveal,
+        };
         if self.write(row)
             && let Some(t) = self.current_mut()
         {
@@ -1394,7 +1430,8 @@ impl App {
         if let Some((a, b)) = t.view {
             return (a.max(0.0), b.min(total.max(b)));
         }
-        if t.board().is_some() && t.zoom_sound
+        if t.board().is_some()
+            && t.zoom_sound
             && let Some(r) = self.view_range()
         {
             return r;
@@ -1510,9 +1547,10 @@ impl App {
             .filter(|g| {
                 has(g.title()) || has(&g.key) || g.subtitle.as_deref().is_some_and(has) || g.chip.as_ref().is_some_and(|c| has(&c.text)) || {
                     let hidden = t.group_hidden(&g.key);
-                    g.playable().iter().enumerate().any(|(i, m)| {
-                        has(&t.board_label(g, i)) || (!hidden && (has(&m.role) || self.entry(&m.item).is_some_and(|e| !e.item.is_ref && has(&e.item.name))))
-                    })
+                    g.playable()
+                        .iter()
+                        .enumerate()
+                        .any(|(i, m)| has(&t.board_label(g, i)) || (!hidden && (has(&m.role) || self.entry(&m.item).is_some_and(|e| !e.item.is_ref && has(&e.item.name)))))
                 }
             })
             .collect()
@@ -1560,7 +1598,11 @@ impl App {
                             .into_iter()
                             .map(|i| {
                                 let m = &g.members[i];
-                                let meta = if hidden { serde_json::Map::new() } else { crate::share::public_meta(m.meta.iter().map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned)))) };
+                                let meta = if hidden {
+                                    serde_json::Map::new()
+                                } else {
+                                    crate::share::public_meta(m.meta.iter().map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))))
+                                };
                                 let nums = if hidden { Value::Object(serde_json::Map::new()) } else { serde_json::to_value(&m.numbers).unwrap_or_default() };
                                 let chip = if hidden { Value::Null } else { serde_json::to_value(&m.chip).unwrap_or_default() };
                                 member(&m.item, t.board_label(g, i), if hidden { "" } else { &m.role }, nums, chip, meta)
@@ -1580,7 +1622,11 @@ impl App {
                         let id = t.spec.items.get(i)?;
                         let name = self.items.get(id).map_or_else(|| id.rsplit('/').next().unwrap_or(id).to_owned(), |e| e.item.name.clone());
                         let label = if t.spec.items.len() > 1 { if t.is_blind_hidden() { t.member_label(i) } else { format!("{} · {name}", t.member_label(i)) } } else { name };
-                        let meta = if t.is_blind_hidden() { serde_json::Map::new() } else { crate::share::public_meta(self.items.get(id).map(|e| e.item.meta.clone()).unwrap_or_default()) };
+                        let meta = if t.is_blind_hidden() {
+                            serde_json::Map::new()
+                        } else {
+                            crate::share::public_meta(self.items.get(id).map(|e| e.item.meta.clone()).unwrap_or_default())
+                        };
                         Some(member(id, label, "", Value::Object(serde_json::Map::new()), Value::Null, meta))
                     })
                     .collect();
@@ -1985,12 +2031,42 @@ impl App {
         std::env::var_os("ADECK_SESSION").map_or_else(|| crate::config::dir().join("session.json"), PathBuf::from)
     }
 
+    /// Saves the session on the next poll.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Opens the pane on your note.
+    pub fn show_note(&mut self) {
+        self.pane_tab = "NOTE".into();
+        if self.pane == crate::ui::px::Dock::Hidden {
+            self.pane = self.pane_last;
+        }
+    }
+
+    /// Docks the pane, or hides it.
+    pub fn set_pane(&mut self, d: crate::ui::px::Dock) {
+        self.pane = d;
+        self.dirty = true;
+    }
+
+    /// `\\`: hides the pane, or brings it back where it was.
+    pub fn toggle_pane(&mut self) {
+        self.pane = if self.pane == crate::ui::px::Dock::Hidden {
+            self.pane_last
+        } else {
+            self.pane_last = self.pane;
+            crate::ui::px::Dock::Hidden
+        };
+        self.dirty = true;
+    }
+
     pub fn save(&self) {
         if self.headless {
             return;
         }
         let specs: Vec<&TabSpec> = self.tabs.iter().map(|t| &t.spec).collect();
-        let v = json!({ "tabs": specs, "active": self.active, "next_tab": self.next_tab });
+        let v = json!({ "tabs": specs, "active": self.active, "next_tab": self.next_tab, "pane": self.pane, "pane_w": self.sheet_w });
         let path = App::session_path();
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
@@ -2009,6 +2085,10 @@ impl App {
             return;
         };
         let specs: Vec<TabSpec> = serde_json::from_value(v["tabs"].clone()).unwrap_or_default();
+        self.pane = serde_json::from_value(v["pane"].clone()).unwrap_or_default();
+        if let Some(w) = v["pane_w"].as_f64() {
+            self.sheet_w = (w as f32).clamp(280.0, 900.0);
+        }
         self.next_tab = v["next_tab"].as_u64().unwrap_or(1).max(specs.iter().map(|s| s.id + 1).max().unwrap_or(1));
         // A headless shot of one tab loads only that tab.
         let focus: Option<u64> = std::env::var("ADECK_FOCUS").ok().and_then(|s| s.parse().ok());
@@ -2101,7 +2181,9 @@ impl App {
                 let items = ids("items");
                 let groups = match a.get("groups") {
                     Some(g) => g.clone(),
-                    None if !items.is_empty() => json!([{ "key": "pads", "title": s("label").unwrap_or_else(|| "Pads".into()), "members": items.iter().map(|i| json!({ "item": i })).collect::<Vec<_>>() }]),
+                    None if !items.is_empty() => {
+                        json!([{ "key": "pads", "title": s("label").unwrap_or_else(|| "Pads".into()), "members": items.iter().map(|i| json!({ "item": i })).collect::<Vec<_>>() }])
+                    }
                     None => return Err("open_pads needs items or groups.".into()),
                 };
                 let b: Board = serde_json::from_value(json!({

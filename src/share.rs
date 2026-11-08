@@ -147,7 +147,12 @@ fn run(command: &Path, args: &[&str]) -> Result<Value, String> {
     let out = Command::new(command).args(args).output().map_err(|e| format!("Couldn't run {}: {e}", command.display()))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("{} {} failed: {}", command.file_name().and_then(|s| s.to_str()).unwrap_or("publisher"), args[0], err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output")));
+        return Err(format!(
+            "{} {} failed: {}",
+            command.file_name().and_then(|s| s.to_str()).unwrap_or("publisher"),
+            args[0],
+            err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output")
+        ));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(serde_json::from_str(text.trim()).unwrap_or(Value::Null))
@@ -186,7 +191,13 @@ fn web_audio(src: &Path, name: &str, dir: &Path) -> Result<(String, PathBuf), St
     let out = dir.join(&out_name);
     let ok = Command::new("afconvert").args(["-f", "m4af", "-d", "aac", "-b", "256000"]).arg(src).arg(&out).output().is_ok_and(|o| o.status.success());
     if !ok {
-        let ok = Command::new("ffmpeg").args(["-y", "-loglevel", "error", "-i"]).arg(src).args(["-vn", "-c:a", "aac", "-b:a", "256k"]).arg(&out).output().is_ok_and(|o| o.status.success());
+        let ok = Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-i"])
+            .arg(src)
+            .args(["-vn", "-c:a", "aac", "-b:a", "256k"])
+            .arg(&out)
+            .output()
+            .is_ok_and(|o| o.status.success());
         if !ok {
             return Err(format!("Couldn't convert {} for the web.", src.display()));
         }
@@ -199,11 +210,12 @@ fn fill(v: &mut Value, name: &str, facts: &Value) {
     match v {
         Value::Object(m) => {
             if m.get("src").and_then(Value::as_str) == Some(name)
-                && let Some(f) = facts.as_object() {
-                    for (k, x) in f {
-                        m.insert(k.clone(), x.clone());
-                    }
+                && let Some(f) = facts.as_object()
+            {
+                for (k, x) in f {
+                    m.insert(k.clone(), x.clone());
                 }
+            }
             for (_, x) in m.iter_mut() {
                 fill(x, name, facts);
             }
@@ -218,10 +230,11 @@ fn rewrite_srcs(v: &mut Value, names: &serde_json::Map<String, Value>, base: &st
     match v {
         Value::Object(m) => {
             if let Some(Value::String(s)) = m.get("src")
-                && let Some(Value::String(n)) = names.get(s) {
-                    let full = format!("{base}{n}");
-                    m.insert("src".into(), Value::String(full));
-                }
+                && let Some(Value::String(n)) = names.get(s)
+            {
+                let full = format!("{base}{n}");
+                m.insert("src".into(), Value::String(full));
+            }
             for (_, x) in m.iter_mut() {
                 rewrite_srcs(x, names, base);
             }

@@ -81,9 +81,3 @@ pub static SHARE: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M8 2.5V10M5.25 5L8 2.25L10.75 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M4.5 7.5H3.75C3.2 7.5 2.75 7.95 2.75 8.5V12.5C2.75 13.05 3.2 13.5 3.75 13.5H12.25C12.8 13.5 13.25 13.05 13.25 12.5V8.5C13.25 7.95 12.8 7.5 12.25 7.5H11.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
 };
-
-pub static MUTED: Icon = Icon {
-    name: "adeck-muted",
-    view: 16.0,
-    body: r#"<path d="M2.75 6.25H5L8.25 3.5V12.5L5 9.75H2.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M10.5 6.25L13.5 9.75M13.5 6.25L10.5 9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
-};

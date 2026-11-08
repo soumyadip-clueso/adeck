@@ -338,12 +338,6 @@ impl Mixer {
         changed
     }
 
-    /// The output's peak just now, in dBFS (-90 when silent or paused).
-    pub fn level_db(&self) -> f32 {
-        let v = f32::from_bits(self.shared.level.load(Ordering::Acquire));
-        if !self.is_playing() || v <= 1e-5 { -90.0 } else { 20.0 * v.log10() }
-    }
-
     pub fn set_volume(&mut self, v: f32) {
         self.volume = v.clamp(0.0, 1.5);
         let v = self.volume;

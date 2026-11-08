@@ -18,7 +18,9 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     };
     let mut status = row().gap(8.0).center_y();
     match &s.shares_checked {
-        None if s.cfg.share.command().is_some() => status = status.child(Spinner::new().size(12.0).build(k)).child(text("Checking which are still up…").font(k.ty.small).color(c.text_muted)),
+        None if s.cfg.share.command().is_some() => {
+            status = status.child(Spinner::new().size(12.0).build(k)).child(text("Checking which are still up…").font(k.ty.small).color(c.text_muted))
+        }
         Some(Err(e)) => status = status.child(text(format!("Couldn't check: {e}")).font(k.ty.small).color(c.danger.fg).truncate()),
         _ => {}
     }
@@ -44,7 +46,9 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
                 .radius(k.radius.lg)
                 .border(1.0, c.border_weak)
                 .child(text("Sharing isn't set up").font(k.ty.ui_medium).color(c.text_base))
-                .child(text("Add a [share] section to ~/.config/adeck/config.toml naming the program that publishes a page (see the README).").font(k.ty.small).color(c.text_muted)),
+                .child(
+                    text("Add a [share] section to ~/.config/adeck/config.toml naming the program that publishes a page (see the README).").font(k.ty.small).color(c.text_muted),
+                ),
         );
     }
     let q = t.filter.text.trim().to_lowercase();
@@ -66,13 +70,15 @@ fn entry(s: &App, sh: &Share, width: f32, k: &Kit) -> El {
     let audio = if sh.audio == "bundle" { "audio in the page".to_owned() } else { "audio on S3".to_owned() };
     let facts = format!("{when} · {} sound{} · {audio}", sh.files, if sh.files == 1 { "" } else { "s" });
     let mut info = col().gap(2.0).min_w(0.0).shrink().child(
-        row()
-            .gap(8.0)
-            .center_y()
-            .child(text(sh.title.clone()).font(k.ty.ui_medium).color(if sh.gone { c.text_muted } else { c.text_base }).truncate())
-            .child(if sh.gone { text("taken down").font(k.ty.small).color(c.text_faint) } else { text(String::new()) }),
+        row().gap(8.0).center_y().child(text(sh.title.clone()).font(k.ty.ui_medium).color(if sh.gone { c.text_muted } else { c.text_base }).truncate()).child(if sh.gone {
+            text("taken down").font(k.ty.small).color(c.text_faint)
+        } else {
+            text(String::new())
+        }),
     );
-    info = info.child(text(sh.url.clone()).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).truncate().selectable(true)).child(text(facts).font(k.ty.small).color(c.text_faint));
+    info = info
+        .child(text(sh.url.clone()).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).truncate().selectable(true))
+        .child(text(facts).font(k.ty.small).color(c.text_faint));
     let url = sh.url.clone();
     let url2 = sh.url.clone();
     let slug = sh.slug.clone();
@@ -119,7 +125,18 @@ fn entry(s: &App, sh: &Share, width: f32, k: &Kit) -> El {
         .build(k)
         .key(format!("share-down-{}", sh.slug)),
     );
-    let mut r = row().key(format!("share-{}", sh.slug)).w_full().gap(12.0).center_y().px(14.0).py(10.0).radius(k.radius.lg).fill(c.layer_01).border(1.0, c.border_weak).motion(rune::Spring::SNAPPY).transition(rune::Transition::opacity());
+    let mut r = row()
+        .key(format!("share-{}", sh.slug))
+        .w_full()
+        .gap(12.0)
+        .center_y()
+        .px(14.0)
+        .py(10.0)
+        .radius(k.radius.lg)
+        .fill(c.layer_01)
+        .border(1.0, c.border_weak)
+        .motion(rune::Spring::SNAPPY)
+        .transition(rune::Transition::opacity());
     if width < 640.0 {
         r = r.flex_wrap();
     }

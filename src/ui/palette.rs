@@ -84,11 +84,25 @@ pub fn everything(s: &App) -> Vec<Hit> {
         if Some(tab.id()) == s.active {
             continue;
         }
-        v.push(Hit { section: "Tabs", title: crate::ui::tab_title(s, tab), detail: format!("{:?}", tab.spec.kind).to_lowercase(), keys: "", icon: &icons::BOARD, act: Act::Tab(tab.id()) });
+        v.push(Hit {
+            section: "Tabs",
+            title: crate::ui::tab_title(s, tab),
+            detail: format!("{:?}", tab.spec.kind).to_lowercase(),
+            keys: "",
+            icon: &icons::BOARD,
+            act: Act::Tab(tab.id()),
+        });
     }
     if let Some((t, b)) = t.and_then(|t| t.board().map(|b| (t, b))) {
         for g in b.sorted() {
-            v.push(Hit { section: "Groups", title: g.title().to_owned(), detail: g.subtitle.clone().unwrap_or_default(), keys: "", icon: &icons::BOARD, act: Act::Group(g.key.clone()) });
+            v.push(Hit {
+                section: "Groups",
+                title: g.title().to_owned(),
+                detail: g.subtitle.clone().unwrap_or_default(),
+                keys: "",
+                icon: &icons::BOARD,
+                act: Act::Group(g.key.clone()),
+            });
         }
         for g in b.sorted() {
             for i in 0..g.playable().len() {

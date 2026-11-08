@@ -271,7 +271,11 @@ fn share_tab(args: &Value, ctx: &Ctx) -> Result<Value, String> {
 fn unshare(args: &Value, ctx: &Ctx) -> Result<Value, String> {
     let slug = args.get("slug").and_then(Value::as_str).ok_or("slug is required")?;
     let all = ctx.ui("list_shares", json!({}))?;
-    let sh: crate::share::Share = all["shares"].as_array().and_then(|a| a.iter().find(|s| s["slug"] == slug)).and_then(|s| serde_json::from_value(s.clone()).ok()).ok_or_else(|| format!("No share {slug}."))?;
+    let sh: crate::share::Share = all["shares"]
+        .as_array()
+        .and_then(|a| a.iter().find(|s| s["slug"] == slug))
+        .and_then(|s| serde_json::from_value(s.clone()).ok())
+        .ok_or_else(|| format!("No share {slug}."))?;
     crate::share::remove(&sh, &ctx.cfg.share, &ctx.cfg.aws)?;
     ctx.ui("_unshared", json!({"slug": slug}))?;
     Ok(json!({"removed": slug}))
@@ -430,12 +434,7 @@ pub fn tools() -> Vec<Value> {
             json!({"label": {"type": "string"}, "note": note, "a": {"type": "string", "description": "What A is, e.g. \"chain v1\"."}, "b": {"type": "string"}, "metrics": metrics(), "rows": diff_rows()}),
             &["a", "b"],
         ),
-        tool(
-            "get_decisions",
-            "The user's latest keep/drop/move:<group> on each file of a board (tab_id) or of the given items.",
-            json!({"tab_id": tab, "items": items}),
-            &[],
-        ),
+        tool("get_decisions", "The user's latest keep/drop/move:<group> on each file of a board (tab_id) or of the given items.", json!({"tab_id": tab, "items": items}), &[]),
         tool(
             "get_selection",
             "What the user pointed you at: they double-click a strip, tile or member (or press S / Send to agent) and it lands here with the tab, group, member, item id (absent while blind), the loop or zoomed range and the playhead, plus any note. Newest first. wait_for_feedback also wakes on one.",

@@ -5,53 +5,97 @@ use rune::{Color, Drag, El, Phase, Tx, col, el, oklch, row, spacer, text};
 use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit};
 
 use crate::app::{App, Entry, Tab};
-use crate::ui::icons;
+use crate::ui::{icons, px};
 
 /// The strips' dark ground, the same in both themes, as a meter's screen is.
 pub fn screen() -> Color {
-    oklch(0.17, 0.005, 260.0)
+    px::SCREEN
 }
 
-/// The waveform from an envelope: peaks as a soft grey body, RMS as a bright core, edges
-/// anti-aliased. Straight-alpha RGBA, `w`×`h`.
+/// Dot pitch, in device pixels, for a picture `h` tall: 8 (4pt at 2x) on strips, smaller on
+/// thumbnails so they still show a shape.
+fn cell_for(h: usize) -> usize {
+    (h / 22).clamp(4, 8)
+}
+
+/// Lights one dot of a `cell`-pitch grid.
+fn dot(px: &mut [u8], w: usize, h: usize, cell: usize, (c, r): (usize, usize), rgba: [u8; 4]) {
+    let d = cell - cell / 4;
+    for y in r * cell..(r * cell + d).min(h) {
+        let o = (y * w + c * cell) * 4;
+        for x in 0..d.min(w.saturating_sub(c * cell)) {
+            px[o + x * 4..o + x * 4 + 4].copy_from_slice(&rgba);
+        }
+    }
+}
+
+const UNLIT: [u8; 4] = [255, 255, 255, 12];
+
+/// The waveform as an LED screen: each column of dots lit to the peak (grey) with the loudness
+/// core brighter, unlit dots faintly there. Straight-alpha RGBA, `w`×`h`.
 pub fn paint_wave(env: &[[f32; 3]], w: usize, h: usize) -> Vec<u8> {
     let mut px = vec![0u8; w * h * 4];
     if env.is_empty() || w == 0 || h == 0 {
         return px;
     }
     let peak = env.iter().fold(0f32, |m, c| m.max(c[0].abs()).max(c[1].abs())).max(1e-6);
-    // Quiet files still fill most of the strip, as a DAW's normalised view does.
-    let gain = (0.86 / peak).min(64.0);
-    let mid = h as f32 / 2.0;
-    const BODY: ([u8; 3], f32) = ([140, 142, 150], 0.6);
-    const CORE: ([u8; 3], f32) = ([214, 215, 220], 0.95);
-    let mut put = |x: usize, y: usize, (rgb, a): ([u8; 3], f32), cov: f32| {
-        let o = (y * w + x) * 4;
-        let a = (a * cov.clamp(0.0, 1.0) * 255.0) as u8;
-        if a >= px[o + 3] {
-            px[o..o + 3].copy_from_slice(&rgb);
-            px[o + 3] = a;
-        }
-    };
-    for x in 0..w {
-        let a = x * env.len() / w;
-        let b = ((x + 1) * env.len() / w).max(a + 1).min(env.len());
+    // Quiet files still fill most of the screen, as a DAW's normalised view does.
+    let gain = (0.92 / peak).min(64.0);
+    let cell = cell_for(h);
+    let (cols, rows) = (w.div_ceil(cell), h / cell);
+    let mid = rows as f32 / 2.0;
+    for c in 0..cols {
+        let a = c * cell * env.len() / w;
+        let b = (((c + 1) * cell).min(w) * env.len() / w).max(a + 1).min(env.len());
         let (mut lo, mut hi, mut rms) = (0f32, 0f32, 0f32);
-        for c in &env[a..b] {
-            lo = lo.min(c[0]);
-            hi = hi.max(c[1]);
-            rms = rms.max(c[2]);
+        for e in &env[a.min(env.len() - 1)..b] {
+            lo = lo.min(e[0]);
+            hi = hi.max(e[1]);
+            rms = rms.max(e[2]);
         }
-        // Each band covers [a, b] in pixel rows; a row's coverage gives its alpha.
-        let mut band = |a: f32, b: f32, ink: ([u8; 3], f32)| {
-            let (a, b) = (a.max(0.0), b.min(h as f32));
-            for y in (a.floor() as usize)..(b.ceil() as usize).min(h) {
-                put(x, y, ink, (b.min(y as f32 + 1.0) - a.max(y as f32)).max(0.0));
+        let (hp, hr) = (hi.max(-lo) * gain * mid, rms * gain * mid);
+        for r in 0..rows {
+            let dy = (r as f32 + 0.5 - mid).abs();
+            let ink = if dy <= hr.max(0.5) {
+                [238, 238, 240, 255]
+            } else if dy <= hp.max(0.5) {
+                [150, 152, 160, 230]
+            } else {
+                UNLIT
+            };
+            dot(&mut px, w, h, cell, (c, r), ink);
+        }
+    }
+    px
+}
+
+/// The spectrogram as an LED screen, sampled from its cached picture (`sw`×`sh`, greys, low
+/// frequencies at the bottom) between fractions `x0` and `x1` of its width.
+pub fn paint_spec(raw: &[u8], (sw, sh): (usize, usize), (x0, x1): (f64, f64), w: usize, h: usize) -> Vec<u8> {
+    let mut px = vec![0u8; w * h * 4];
+    if raw.len() < sw * sh * 4 || sw == 0 || sh == 0 || w == 0 || h == 0 {
+        return px;
+    }
+    let cell = cell_for(h);
+    let (cols, rows) = (w.div_ceil(cell), h / cell);
+    for c in 0..cols {
+        let fa = x0 + (x1 - x0) * (c * cell) as f64 / w as f64;
+        let fb = x0 + (x1 - x0) * (((c + 1) * cell).min(w)) as f64 / w as f64;
+        let (xa, xb) = ((fa * sw as f64) as usize, ((fb * sw as f64).ceil() as usize).max((fa * sw as f64) as usize + 1).min(sw));
+        for r in 0..rows {
+            let (ya, yb) = (r * sh / rows, ((r + 1) * sh / rows).max(r * sh / rows + 1).min(sh));
+            let mut v = 0u8;
+            for y in ya..yb {
+                for x in xa.min(sw - 1)..xb {
+                    v = v.max(raw[(y * sw + x) * 4]);
+                }
             }
-        };
-        let r = (rms * gain * mid).max(0.6);
-        band(mid - hi * gain * mid - 0.5, mid - lo * gain * mid + 0.5, BODY);
-        band(mid - r, mid + r, CORE);
+            // The cached picture runs from near-black (22) to white (250).
+            let t = ((f32::from(v) - 22.0) / 228.0).clamp(0.0, 1.0);
+            let g = (150.0 + 105.0 * t) as u8;
+            let a = (12.0 + 243.0 * t.powf(1.3)) as u8;
+            dot(&mut px, w, h, cell, (c, r), [g, g, g.saturating_add(3), a]);
+        }
     }
     px
 }
@@ -121,8 +165,7 @@ pub fn wave_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
 #[allow(clippy::too_many_arguments)]
 pub fn spec_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, k: &Kit) -> El {
     let height = height * tab.strip_h;
-    let mut strip =
-        el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
+    let mut strip = el().key(key.to_owned()).instant_changes().w_full().h(height).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
     let Some((e, a)) = e.and_then(|e| e.analysis.as_ref().map(|a| (e, a))) else {
         return strip;
     };
@@ -135,41 +178,50 @@ pub fn spec_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, 
             continue;
         }
         let y = height * (1.0 - (hz / flo).ln() / (nyq / flo).ln());
-        strip = strip
-            .child(el().absolute(0.0, y).w_full().h(1.0).fill(Color::WHITE.alpha(0.08)).inert())
-            .child(text(label).font(rune::TextStyle { size: 9.0, ..k.ty.small }).color(Color::WHITE.alpha(0.45)).absolute(4.0, y - 12.0).inert());
+        strip = strip.child(
+            row()
+                .absolute(6.0, (y - 9.0).clamp(4.0, height - 18.0))
+                .px(4.0)
+                .py(2.0)
+                .fill(px::SCREEN)
+                .inert()
+                .child(text(label.to_uppercase()).font(px::pixel(10.0)).color(px::SILK)),
+        );
     }
     strip = overlays(strip, s, tab, width, height, (lo, hi), k);
     scrub_handler(strip, lo, hi)
 }
 
-/// A file's picture over [lo, hi]: the waveform redrawn for that stretch when zoomed in (so it
-/// stays sharp), else the whole picture stretched and shifted into place.
+/// A file's picture over [lo, hi], redrawn as LED dots at the strip's pixel size (2x) whenever
+/// the window, zoom or size changes, so the dots stay square and sharp.
 fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32, height: f32, spec: bool) -> El {
     e.ensure_full();
     let span = (hi - lo).max(1e-6);
-    if !spec && a.secs > 0.0 {
-        // Drawn at the strip's pixel size (2x), so nothing is stretched into hairlines.
-        let w = ((width * 2.0).round() as u32).clamp(64, 6000);
-        let h = ((height * 2.0).round() as u32).clamp(32, 600);
-        let key = ((lo * 1000.0) as u64, (hi * 1000.0) as u64, w, h);
-        if e.view_key.get() != key {
+    if a.secs <= 0.0 {
+        return el();
+    }
+    let w = ((width * 2.0).round() as u32).clamp(64, 6000);
+    let h = ((height * 2.0).round() as u32).clamp(32, 1600);
+    // Past the file's end the screen stays dark, so draw only the part that exists.
+    let own = ((((a.secs.min(hi) - lo) / span) * f64::from(w)).round() as usize).clamp(1, w as usize);
+    let key = ((lo * 1000.0) as u64, (hi * 1000.0) as u64, w, h);
+    let (pixels, cache) = if spec { (&e.spec_view, &e.spec_key) } else { (&e.view_px, &e.view_key) };
+    if cache.get() != key {
+        if spec {
+            let raw = e.spec_raw.borrow();
+            pixels.set(own as u32, h, paint_spec(&raw, (a.spec_w as usize, a.spec_h as usize), (lo / a.secs, a.secs.min(hi) / a.secs), own, h as usize));
+        } else {
             let n = a.envelope.len();
             let ca = ((lo / a.secs) * n as f64).floor().max(0.0) as usize;
             let cb = (((hi / a.secs) * n as f64).ceil() as usize).min(n);
             if cb > ca {
-                // Past the file's end the strip stays dark, so draw only the part that exists.
-                let own = ((((a.secs.min(hi) - lo) / span) * f64::from(w)).round() as usize).clamp(1, w as usize);
-                e.view_px.set(own as u32, h, paint_wave(&a.envelope[ca..cb], own, h as usize));
+                pixels.set(own as u32, h, paint_wave(&a.envelope[ca..cb], own, h as usize));
             }
-            e.view_key.set(key);
         }
-        let own = (((a.secs.min(hi) - lo) / span) as f32 * width).max(0.0);
-        return el().absolute(0.0, 0.0).w(own).h_full().pixels(&e.view_px).inert();
+        cache.set(key);
     }
-    let full_w = width * (a.secs / span) as f32;
-    let x0 = -width * (lo / span) as f32;
-    el().absolute(x0, 0.0).w(full_w).h_full().pixels(if spec { &e.spec } else { &e.wave }).inert()
+    let own_w = (((a.secs.min(hi) - lo) / span) as f32 * width).max(0.0);
+    el().absolute(0.0, 0.0).w(own_w).h_full().pixels(pixels).inert()
 }
 
 /// The loop region and the playhead over a strip.
@@ -185,8 +237,7 @@ fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, (lo, hi)
     let ph = playhead(s, tab);
     if ph >= lo && ph <= hi {
         let x = x_of(ph);
-        // A soft glow behind a crisp line, like a DAW's cursor.
-        strip = strip.child(el().absolute(x - 4.0, 0.0).w(8.0).h(height).fill(Color::WHITE.alpha(0.10)).inert()).child(el().absolute(x - 1.0, 0.0).w(2.0).h(height).fill(Color::WHITE).inert());
+        strip = strip.child(el().absolute(x - 1.0, 0.0).w(2.0).h(height).fill(px::AMBER).inert());
     }
     strip
 }
@@ -252,9 +303,9 @@ pub fn ruler(s: &App, tab: &Tab, key: &str, k: &Kit) -> El {
     // Percent positions: the ruler has no width of its own until it's laid out.
     for m in marks {
         let f = ((m - lo) / span) as f32;
-        let mut mark = col().gap(0.0).child(el().w(1.0).h(6.0).fill(c.border_strong));
+        let mut mark = col().gap(0.0).child(el().w(1.0).h(4.0).fill(c.border_strong));
         if f < 0.94 {
-            mark = mark.child(text(tick_label(m, step)).font(rune::TextStyle { size: 10.0, ..k.ty.small.features("'tnum' 1") }).color(c.text_faint).offset(3.0, -3.0));
+            mark = mark.child(text(tick_label(m, step)).font(px::pixel(11.0)).color(px::FAINT).offset(3.0, -1.0));
         }
         r = r.child(at_frac(f, mark));
     }
@@ -284,203 +335,6 @@ pub fn ruler(s: &App, tab: &Tab, key: &str, k: &Kit) -> El {
     })
 }
 
-/// A handle under the strips: drag it to make them taller or shorter.
-pub fn grip(tab: &Tab, k: &Kit) -> El {
-    let c = &k.c;
-    let h = tab.strip_h;
-    row()
-        .key("strip-grip")
-        .w_full()
-        .h(10.0)
-        .center()
-        .cursor(rune::Cursor::ResizeRow)
-        .help(format!("Drag to resize the strips ({:.0}%) · double-click resets", h * 100.0))
-        .child(el().w(36.0).h(4.0).radius(2.0).fill(c.border_strong))
-        .on_drag(|s: &mut App, d: &mut Drag, _tx: &mut Tx| {
-            let Some(t) = s.current_mut() else { return };
-            if matches!(d.phase, Phase::Down) {
-                d.data = t.strip_h;
-            }
-            t.strip_h = (d.data + d.dy / 140.0).clamp(0.5, 3.0);
-        })
-        .on_double_press(|s: &mut App| {
-            if let Some(t) = s.current_mut() {
-                t.strip_h = 1.0;
-            }
-        })
-}
-
-/// A thin draggable bar: `frac` filled, the drag hands back a new fraction.
-fn bar(key: &str, frac: f32, w: Option<f32>, fill: Color, k: &Kit, on: impl Fn(&mut App, f32, Phase) + 'static) -> El {
-    let c = &k.c;
-    let f = frac.clamp(0.0, 1.0);
-    let mut b = el().key(key.to_owned()).instant_changes().h(18.0).cursor(rune::Cursor::Pointer);
-    b = match w {
-        Some(w) => b.w(w),
-        None => b.grow(1.0).min_w(60.0),
-    };
-    b.child(el().absolute(0.0, 7.0).w_full().h(4.0).radius(2.0).fill(c.layer_03))
-        .child(el().absolute(0.0, 7.0).w_frac(f).h(4.0).radius(2.0).fill(fill))
-        .child(at_frac(f, el().offset(-6.0, 3.0).size(12.0, 12.0).radius(6.0).fill(Color::WHITE).border(1.0, c.border_strong)))
-        .on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
-            if d.w > 0.0 {
-                on(s, (d.x / d.w).clamp(0.0, 1.0), d.phase);
-            }
-        })
-}
-
-/// The output level, a meter that falls back smoothly.
-pub fn meter(s: &App, k: &Kit) -> El {
-    let db = s.mixer.level_db();
-    let f = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
-    let color = if db > -1.0 {
-        k.c.danger.icon
-    } else if db > -9.0 {
-        k.c.warning.icon
-    } else {
-        k.c.success.icon
-    };
-    row()
-        .key("level")
-        .w(40.0)
-        .h(6.0)
-        .radius(3.0)
-        .fill(k.c.layer_03)
-        .clip_rounded(3.0)
-        .help(if db <= -89.0 { "Level".to_owned() } else { format!("Level {db:.0} dBFS") })
-        .child(el().w_frac(f).h_full().fill(color).motion(rune::Spring::SMOOTH))
-}
-
-/// The volume control: an icon and a bar.
-pub fn volume(s: &App, k: &Kit) -> El {
-    let vol = s.mixer.volume;
-    row()
-        .gap(4.0)
-        .center_y()
-        .help(format!("Volume {}", if vol <= 0.001 { "muted".into() } else { format!("{:+.1} dB", 20.0 * vol.log10()) }))
-        .child(rune::icon(if vol <= 0.001 { &icons::MUTED } else { &icons::SPEAKER }, 14.0).color(k.c.text_muted))
-        .child(bar("volume", vol / 1.5, Some(70.0), k.c.text_muted, k, |s: &mut App, f, _| s.set_volume(f * 1.5)))
-}
-
-/// The transport every audio tab shares: play, time, a scrubber over the whole file (with the
-/// zoomed window marked), zoom, volume, the level, the loop, the note and send-to-agent.
-pub fn transport(s: &App, tab: &Tab, k: &Kit) -> El {
-    let c = &k.c;
-    let playing = s.mixer_is_for(tab.id()) && s.mixer.is_playing();
-    let play = IconButton::new(if playing { &icons::PAUSE } else { &icons::PLAY })
-        .variant(IconButtonVariant::Contrast)
-        .label(if playing { "Pause" } else { "Play" })
-        .shortcut("Space")
-        .on_press(|s: &mut App| s.toggle_play())
-        .build(k)
-        .key("play");
-    let total = tab_secs(s, tab);
-    let ph = playhead(s, tab);
-    let mut scrub = bar("scrubber", if total > 0.0 { (ph / total) as f32 } else { 0.0 }, None, c.text_base, k, move |s: &mut App, f, phase| s.scrub(f64::from(f) * total, phase));
-    if let Some((a, b)) = tab.view.filter(|_| total > 0.0) {
-        scrub = scrub.child(at_frac((a / total) as f32, el().offset(0.0, 4.0).w_frac(((b - a) / total) as f32).h(10.0).radius(3.0).border(1.0, c.text_muted.alpha(0.6))));
-    }
-    let small = |label: &str, help: &str, key: &str| Button::new(label.to_owned()).variant(ButtonVariant::Outline).control_size(ControlSize::Small).help(help.to_owned()).build(k).key(key.to_owned());
-    let zoom = row()
-        .gap(4.0)
-        .center_y()
-        .child(small("−", "Zoom out · −", "zoom-out").on_press(|s: &mut App| s.zoom(2.0)))
-        .child(small(if tab.view.is_some() { "Fit" } else { "All" }, "Whole file, or the loop · F", "zoom-fit").on_press(|s: &mut App| s.zoom_fit()))
-        .child(small("+", "Zoom in · =", "zoom-in").on_press(|s: &mut App| s.zoom(0.5)));
-    let vol = s.mixer.volume;
-    let volume = row()
-        .gap(4.0)
-        .center_y()
-        .help(format!("Volume {}", if vol <= 0.001 { "muted".into() } else { format!("{:+.1} dB", 20.0 * vol.log10()) }))
-        .child(rune::icon(if vol <= 0.001 { &icons::MUTED } else { &icons::SPEAKER }, 14.0).color(c.text_muted))
-        .child(bar("volume", vol / 1.5, Some(70.0), c.text_muted, k, |s: &mut App, f, _| s.set_volume(f * 1.5)));
-    let mut r = row()
-        .key("transport")
-        .w_full()
-        .gap(10.0)
-        .center_y()
-        .child(play)
-        .child(meter(s, k))
-        .child(text(format!("{} / {}", clock(ph), clock(total))).key("clock").font(k.ty.body_medium.features("'tnum' 1")).color(c.text_base))
-        .child(scrub)
-        .child(zoom)
-        .child(volume);
-    if s.mixer_is_for(tab.id()) && s.mixer.is_loading() {
-        r = r.child(rune_kit::Spinner::new().size(12.0).build(k));
-    }
-    if let Some((a, b)) = tab.loop_secs {
-        r = r.child(
-            Button::new(format!("Loop {}–{}  ✕", clock(a), clock(b)))
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .help("Clear the loop · Esc")
-                .on_press(|s: &mut App| s.set_loop(None))
-                .build(k)
-                .key("loop"),
-        );
-    }
-    r = r
-        .child(
-            Button::new("Note")
-                .variant(if tab.note_open { ButtonVariant::Contrast } else { ButtonVariant::Outline })
-                .control_size(ControlSize::Small)
-                .help("Write a note for the agent · N")
-                .on_press(|s: &mut App| s.toggle_note())
-                .build(k)
-                .key("note-toggle"),
-        )
-        .child(
-            Button::new("Send to agent")
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .help("Hand the agent what you're on: the file, the group, the loop or the zoomed stretch · S, or double-click it")
-                .on_press_tx(|s: &mut App, tx: &mut Tx| s.send_to_agent(None, tx))
-                .build(k)
-                .key("send"),
-        );
-    if let Some(e) = &s.mixer.error {
-        r = r.child(text(e.clone()).font(k.ty.small).color(c.danger.fg).truncate().max_w(360.0));
-    }
-    r.flex_wrap()
-}
-
-/// Buttons 0 to 3 for the member you're hearing, with the latest score lit.
-pub fn score_buttons(s: &App, tab: &Tab, k: &Kit) -> El {
-    let c = &k.c;
-    let current = tab.spec.items.get(tab.active).and_then(|i| s.scores.get(i)).copied();
-    let help = ["0 · unusable", "1 · usable under a voiceover", "2 · as good as what ships today", "3 · library level"];
-    let mut r = row().key("scores").gap(4.0).center_y().child(text("Score").font(k.ty.small).color(c.text_muted));
-    for v in 0..4i64 {
-        let on = current == Some(v);
-        r = r.child(
-            Button::new(v.to_string())
-                .variant(if on { ButtonVariant::Contrast } else { ButtonVariant::Outline })
-                .control_size(ControlSize::Small)
-                .help(format!("{} · press {v}", help[v as usize]))
-                .on_press(move |s: &mut App| s.score(v))
-                .build(k)
-                .key(format!("score-{v}")),
-        );
-    }
-    r
-}
-
-/// The note field, shown when you ask for it (Note, or N), with save and close.
-pub fn note_field(tab: &Tab, k: &Kit) -> El {
-    if !tab.note_open {
-        return el();
-    }
-    let input = rune_kit::TextInput::new(&tab.note)
-        .placeholder("Note for the agent")
-        .on_edit(|s: &mut App| &mut s.current_mut().expect("a tab").note)
-        .build(k)
-        .key("note")
-        .w_full();
-    let save = Button::new("Save").variant(ButtonVariant::Contrast).control_size(ControlSize::Small).on_press(|s: &mut App| s.note_only()).build(k).key("note-save");
-    let close = IconButton::new(&icons::CLOSE).variant(IconButtonVariant::Ghost).label("Hide the note").on_press(|s: &mut App| s.toggle_note()).build(k).key("note-close");
-    row().key("note-row").w_full().gap(8.0).center_y().transition(rune::Transition::offset(0.0, 12.0).combined(rune::Transition::opacity())).child(col().grow(1.0).min_w(0.0).child(input)).child(save).child(close)
-}
-
 /// A tab's search box: narrows what the tab lists as you type. `/` focuses it, Esc clears it.
 pub fn search_field(t: &Tab, placeholder: &str, width: f32, k: &Kit) -> El {
     rune_kit::TextInput::new(&t.filter)
@@ -502,60 +356,27 @@ pub fn search_field(t: &Tab, placeholder: &str, width: f32, k: &Kit) -> El {
         .key("tab-search")
 }
 
-/// Rows of key and value, in a scrolling column.
-pub fn kv_table(key: &str, rows: &[(String, String)], highlight: &dyn Fn(&str) -> bool, k: &Kit) -> El {
-    let c = &k.c;
-    let mut list = col().key(format!("{key}-rows")).w_full().gap(0.0);
-    for (i, (name, value)) in rows.iter().enumerate() {
-        let hot = highlight(name);
-        list = list.child(
-            row()
-                .key(format!("{key}-{i}"))
-                .w_full()
-                .px(8.0)
-                .py(4.0)
-                .gap(12.0)
-                .fill(if hot {
-                    c.text_base.alpha(0.10)
-                } else if i % 2 == 1 {
-                    c.layer_01
-                } else {
-                    Color::TRANSPARENT
-                })
-                .child(text(name.clone()).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).w(180.0).truncate().help_when_truncated(name.clone()))
-                .child(text(value.clone()).font(k.ty.small.features("'tnum' 1")).color(c.text_base).wrap().grow(1.0).min_w(0.0).selectable(true)),
-        );
-    }
-    if rows.is_empty() {
-        list = list.child(text("No metadata was found for this file.").font(k.ty.small).color(c.text_faint).px(8.0).py(6.0));
-    }
-    col().key(key.to_owned()).w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list)
-}
-
 /// A small titled number: "LUFS -14.2".
 pub fn stat(label: &str, value: String, k: &Kit) -> El {
     col().gap(1.0).child(text(label.to_owned()).font(k.ty.small).color(k.c.text_faint)).child(text(value).font(k.ty.body_medium.features("'tnum' 1")).color(k.c.text_base))
 }
 
-/// The native numbers for one file.
-pub fn stats(e: Option<&Entry>, trim_db: Option<f64>, k: &Kit) -> El {
+/// The file's numbers as pixel readouts: LUFS, peak, BPM, key, rate (and the loudness match).
+pub fn readouts(e: Option<&Entry>, trim_db: Option<f64>) -> El {
     let Some(a) = e.and_then(|e| e.analysis.as_ref()) else {
         return row();
     };
-    let mut r = row().gap(18.0).center_y().child(stat("Length", clock(a.secs), k)).child(stat("LUFS", a.lufs.map_or("–".into(), |l| format!("{l:.1}")), k)).child(stat(
-        "Peak",
-        format!("{:.1} dB", a.peak_dbfs),
-        k,
-    ));
+    let mut r =
+        row().key("readouts").gap(28.0).child(px::readout("LUFS", a.lufs.map_or("–".into(), |l| format!("{l:.1}")))).child(px::readout("PEAK", format!("{:.1}", a.peak_dbfs)));
     if let Some(b) = a.bpm {
-        r = r.child(stat("BPM", format!("{b:.1}"), k));
+        r = r.child(px::readout("BPM", format!("{b:.0}")));
     }
     if let Some(key) = &a.key {
-        r = r.child(stat("Key", key.clone(), k));
+        r = r.child(px::readout("KEY", key.replace(['(', ')'], "")));
     }
-    r = r.child(stat("Rate", format!("{} Hz · {}ch", a.rate, a.channels), k));
+    r = r.child(px::readout("RATE", format!("{:.1}K", f64::from(a.rate) / 1000.0)));
     if let Some(t) = trim_db {
-        r = r.child(stat("Match", format!("{t:+.1} dB",), k));
+        r = r.child(px::readout("MATCH", format!("{t:+.1}")));
     }
     r
 }
@@ -610,12 +431,11 @@ pub fn annotation(tab: &Tab, k: &Kit) -> Option<El> {
             .py(if folded { 4.0 } else { 8.0 })
             .gap(10.0)
             .center_y()
-            .radius(k.radius.md)
-            .fill(c.text_base.alpha(0.08))
-            .border(1.0, c.text_base.alpha(0.25))
+            .radius(6.0)
+            .border(1.0, px::GRILLE)
             .animate_layout()
             .transition(rune::Transition::opacity())
-            .child(rune::icon(&icons::SPARK, 14.0).color(c.text_base))
+            .child(text("AGENT").font(px::pixel(11.0)).color(px::AMBER))
             .child(body)
             .child(fold)
             .child(close),

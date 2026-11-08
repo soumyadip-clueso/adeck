@@ -8,7 +8,21 @@ use crate::app::{App, TabKind};
 
 type Scene = (&'static str, fn(&mut App));
 
-pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads), ("palette", palette), ("palette-search", palette_search), ("board-search", board_search), ("keys", keys)];
+pub const ALL: &[Scene] = &[
+    ("empty", empty),
+    ("single", single),
+    ("compare", compare),
+    ("blind", blind),
+    ("run", run),
+    ("board", board),
+    ("board-blind", board_blind),
+    ("diff", diff),
+    ("pads", pads),
+    ("palette", palette),
+    ("palette-search", palette_search),
+    ("board-search", board_search),
+    ("keys", keys),
+];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -128,7 +142,8 @@ fn run(s: &mut App) {
 /// A board shaped like the best-picks page: two categories, picks, a before, a ranked rest.
 pub fn board_args() -> serde_json::Value {
     let [a, b, w, c, tick] = <[String; 5]>::try_from(ids(&["tone-a", "tone-b", "whoosh", "click-120", "tick"])).unwrap_or_default();
-    let target = serde_json::json!({"target_bands_db": {"sub": -30.0, "low": -12.0, "lowmid": -6.0, "mid": -14.0, "presence": -30.0}, "target_correlation": 0.4, "target_decay_ms": 300.0});
+    let target =
+        serde_json::json!({"target_bands_db": {"sub": -30.0, "low": -12.0, "lowmid": -6.0, "mid": -14.0, "presence": -30.0}, "target_correlation": 0.4, "target_decay_ms": 300.0});
     let measure = |sub: f64, corr: f64, decay: f64| serde_json::json!({"bands_db": {"sub": sub, "low": -10.0, "lowmid": -8.0, "mid": -15.0, "presence": -33.0}, "correlation": corr, "decay_ms": decay});
     serde_json::json!({
         "label": "Best picks",
@@ -329,11 +344,16 @@ mod tests {
         let mut rt = rt(board);
         let id = rt.state.active.unwrap();
         let tick = ids(&["tick"]).remove(0);
-        let r = rt.state.call("board_upsert", &serde_json::json!({"tab_id": id, "groups": [
-            {"key": "pop", "sort": 9999, "members": [{"item": tick, "role": "pick"}]},
-            {"key": "ui-click", "sort": 1, "chip": {"text": "good now", "tone": "good"}, "members": [{"item": tick}]}
-        ]}))
-        .unwrap();
+        let r = rt
+            .state
+            .call(
+                "board_upsert",
+                &serde_json::json!({"tab_id": id, "groups": [
+                    {"key": "pop", "sort": 9999, "members": [{"item": tick, "role": "pick"}]},
+                    {"key": "ui-click", "sort": 1, "chip": {"text": "good now", "tone": "good"}, "members": [{"item": tick}]}
+                ]}),
+            )
+            .unwrap();
         assert_eq!((r["added"].as_u64(), r["replaced"].as_u64(), r["groups"].as_u64()), (Some(1), Some(1), Some(3)));
         let b = rt.state.current().unwrap().board().unwrap();
         assert_eq!(b.sorted()[0].key, "pop");
@@ -392,16 +412,8 @@ mod tests {
         for _ in 0..20 {
             rt.frame(1.0 / 60.0);
         }
-        // Narrow: the sheet takes the page, and closing it shows the tiles.
-        for key in ["sheet", "analysis", "details", "bwave"] {
-            let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key}"));
-            assert!(r[0] >= 0.0 && r[0] + r[2] <= 390.5, "{key} spills: {r:?}");
-        }
-        rt.state.toggle_sheet();
-        rt.invalidate();
-        for _ in 0..20 {
-            rt.frame(1.0 / 60.0);
-        }
+        // Narrow: no pane, just the tiles and the player.
+        assert!(rt.find("pane").is_none() && rt.find("pane-edge").is_none());
         for key in ["tile-whoosh-soft-0", "tile-whoosh-soft-2", "board-head"] {
             let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{key}"));
             assert!(r[0] >= 0.0 && r[0] + r[2] <= 390.5, "{key} spills: {r:?}");
@@ -442,7 +454,7 @@ mod tests {
         assert_eq!(rt.state.window(rt.state.current().unwrap()), (0.0, 10.0));
         rt.invalidate();
         rt.frame(1.0 / 60.0);
-        for key in ["ruler", "strip-grip", "scrubber", "volume", "zoom-in", "send"] {
+        for key in ["ruler", "zoom-fit", "scrubber", "volume", "zoom-in", "send"] {
             assert!(rt.find(key).is_some(), "{key}");
         }
     }
@@ -464,12 +476,14 @@ mod tests {
     #[test]
     fn the_note_and_the_agents_note_fold_away() {
         let mut rt = rt(single);
-        assert!(rt.find("note").is_none(), "the note field starts hidden");
-        rt.state.toggle_note();
+        assert!(rt.find("pane-note").is_none(), "the pane opens on META");
+        rt.state.set_pane(crate::ui::px::Dock::Hidden);
+        rt.state.show_note();
         rt.state.current_mut().unwrap().annotation_folded = true;
         rt.invalidate();
         rt.frame(1.0 / 60.0);
-        assert!(rt.find("note").is_some() && rt.find("annotation-fold").is_some());
+        assert!(rt.find("pane-note").is_some(), "N brings the pane back on the note");
+        assert!(rt.find("annotation-fold").is_some());
         let id = rt.state.active.unwrap();
         rt.state.annotate(id, String::new());
         rt.invalidate();
@@ -485,7 +499,10 @@ mod tests {
         for key in ["pad-whoosh-soft-0", "pad-whoosh-soft-3", "pad-ui-click-0", "pad-score-whoosh-soft-0-2"] {
             assert!(rt.find(key).is_some(), "{key}");
         }
-        assert!(rt.find("bwave").is_none(), "no strips until asked");
+        rt.state.set_pane(crate::ui::px::Dock::Hidden);
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("bwave").is_none() && rt.find("pane-edge").is_some(), "hidden pane, no strips");
         assert!(crate::ui::pads::on_key(&mut rt.state, '2'));
         assert_eq!(rt.state.current().unwrap().active, 1);
         assert!(crate::ui::pads::on_key(&mut rt.state, 'c'));
@@ -495,27 +512,32 @@ mod tests {
         let files = ids(&["tick", "tone-a"]);
         let v = rt.state.call("open_pads", &serde_json::json!({"items": files, "label": "Clicks"})).unwrap();
         assert_eq!(v["board"]["groups"], 1);
-        rt.state.current_mut().unwrap().sheet_open = true;
+        rt.state.toggle_pane();
         rt.invalidate();
         rt.frame(1.0 / 60.0);
         assert!(rt.find("pad-pads-1").is_some() && rt.find("bwave").is_some());
     }
 
     #[test]
-    fn the_sheet_slides_in_instead_of_popping() {
-        let mut rt = rt(pads);
-        let ([_, _, w0, _], _) = rt.presented("sheet-slot").expect("slot while closed");
-        assert!(w0 < 1.0, "closed: {w0}");
-        rt.state.toggle_sheet();
+    fn the_pane_docks_either_side_and_hides_to_an_edge() {
+        let mut rt = rt(compare);
+        let x = |rt: &mut Runtime<App>, key: &str| rt.presented(key).unwrap_or_else(|| panic!("{key}")).0[0];
+        assert!(x(&mut rt, "pane") > x(&mut rt, "page"), "docked right by default");
+        rt.state.set_pane(crate::ui::px::Dock::Left);
         rt.invalidate();
-        rt.frame(1.0 / 60.0);
-        rt.frame(1.0 / 60.0);
-        let ([_, _, mid, _], _) = rt.presented("sheet-slot").unwrap();
-        for _ in 0..60 {
+        for _ in 0..40 {
             rt.frame(1.0 / 60.0);
         }
-        let ([_, _, end, _], _) = rt.presented("sheet-slot").unwrap();
-        assert!(mid > 0.0 && mid < end - 20.0, "mid-slide {mid} vs open {end}");
+        assert!(x(&mut rt, "pane") < x(&mut rt, "page"), "docked left");
+        rt.state.toggle_pane();
+        rt.invalidate();
+        for _ in 0..40 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert!(rt.find("pane").is_none() && rt.find("pane-edge").is_some());
+        assert!(x(&mut rt, "pane-edge") < x(&mut rt, "page"), "the edge tab stays on the side it left");
+        rt.state.toggle_pane();
+        assert_eq!(rt.state.pane, crate::ui::px::Dock::Left, "and comes back there");
     }
 
     #[test]

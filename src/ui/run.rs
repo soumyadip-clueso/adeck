@@ -3,9 +3,10 @@
 //! several opens as a compare.
 
 use rune::{El, Tx, col, row, spacer, text};
-use rune_kit::{Button, ButtonVariant, Cell, ControlSize, Kit, Switch, Table, TableColumn, TextInput};
+use rune_kit::{Cell, Kit, Table, TableColumn, TextInput};
 
 use crate::app::{App, Entry, Tab};
+use crate::ui::px;
 
 fn table_state(s: &App) -> &rune_kit::TableState {
     &s.current().expect("a run tab").table
@@ -42,7 +43,6 @@ pub fn cell_value(s: &App, e: &Entry, col: &str) -> String {
 }
 
 pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
-    let c = &k.c;
     let filter = TextInput::new(&t.filter)
         .placeholder("Filter by name or any metadata")
         .leading_icon(&crate::ui::icons::SEARCH)
@@ -56,9 +56,9 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
         })
         .build(k)
         .key("filter");
-    let unscored = Switch::new(t.unscored_only)
-        .label("Unscored only")
-        .on_toggle(|s: &mut App| {
+    let unscored = px::toggle("Unscored only", t.unscored_only)
+        .help("Hide what you've already scored")
+        .on_press(|s: &mut App| {
             if let Some(t) = s.current_mut() {
                 t.unscored_only ^= true;
             }
@@ -66,25 +66,33 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
                 s.refilter(a);
             }
         })
-        .build(k)
         .key("unscored");
     let n = t.table.selected_len();
-    let open = Button::new(match n {
-        0 | 1 => "Open".to_owned(),
-        n => format!("Compare {}", n.min(9)),
-    })
-    .variant(ButtonVariant::Contrast)
-    .control_size(ControlSize::Small)
-    .disabled(n == 0)
-    .help("Open the selected row, or compare a selection (⌘-click to pick several) · Return")
-    .on_press(|s: &mut App| s.open_selection())
-    .build(k)
-    .key("open-selection");
-    let mut head = row().key("run-head").w_full().gap(12.0).center_y().child(filter).child(unscored).child(spacer());
-    if t.loading {
-        head = head.child(row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(12.0).build(k)).child(text("Listing…").font(k.ty.small).color(c.text_muted)));
+    let mut open = px::key(
+        match n {
+            0 | 1 => "OPEN".to_owned(),
+            n => format!("COMPARE {}", n.min(9)),
+        },
+        n > 0,
+    )
+    .key("open-selection")
+    .help("Open the selected row, or compare a selection (⌘-click to pick several) · Return");
+    if n > 0 {
+        open = open.on_press(|s: &mut App| s.open_selection());
+    } else {
+        open = open.opacity(0.4);
     }
-    head = head.child(text(format!("{} items", t.rows.len())).font(k.ty.small).color(c.text_muted)).child(open);
+    let mut count = row().gap(14.0).center_y().child(px::lamp(&format!("{} items", t.rows.len()), px::SILK));
+    let scored = t.rows.iter().filter(|id| s.scores.contains_key(id.as_str())).count();
+    if scored > 0 {
+        count = count.child(px::lamp(&format!("{scored} scored"), px::GOOD));
+    }
+    if t.loading {
+        count = count.child(row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(12.0).build(k)).child(px::label("Listing…")));
+    }
+    let title = col().gap(8.0).min_w(0.0).shrink().child(px::title(t.spec.run.clone().unwrap_or_else(|| "Run".into()))).child(count);
+    let head = row().key("run-head").w_full().gap(16.0).items_end().child(title).child(spacer()).child(open);
+    let tools = row().key("run-tools").w_full().gap(12.0).center_y().child(filter).child(unscored);
 
     let table = Table::new(table_state, table_state_mut, rows_len, row_id)
         .column(TableColumn::new("name", "Name").flex(2.0).min(180.0).sortable())
@@ -104,7 +112,7 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
             match col {
                 "name" if e.item.is_ref => Cell::text(format!("{v}  [REF]")),
                 "secs" | "bpm" | "lufs" | "score" => Cell::text(v).mono(),
-                "flags" if !v.is_empty() => Cell::text(v).color(rune::oklch(0.72, 0.16, 50.0)),
+                "flags" if !v.is_empty() => Cell::text(v).color(px::CLOSE),
                 _ => Cell::text(v),
             }
         })
@@ -123,9 +131,9 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
         .h_full()
         .min_h(0.0);
 
-    let mut page = col().key("run").w_full().h_full().min_h(0.0).gap(10.0).child(head);
+    let mut page = col().key("run").w_full().h_full().min_h(0.0).gap(14.0).child(head).child(tools);
     if let Some(err) = &t.error {
-        page = page.child(text(err.clone()).font(k.ty.small).color(c.danger.fg).wrap());
+        page = page.child(text(err.clone()).font(rune::TextStyle::new(13.0, 400.0)).color(px::BAD).wrap());
     }
-    page.child(col().key("run-table").w_full().grow(1.0).min_h(0.0).h(0.0).child(table)).child(crate::ui::widgets::note_field(t, k))
+    page.child(col().key("run-table").w_full().grow(1.0).min_h(0.0).h(0.0).child(table))
 }

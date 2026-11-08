@@ -2,36 +2,32 @@
 //! compare), the cut strip from earshot's critique, its scorecard and fixes, and the sheet.
 
 use rune::{Color, El, SurfaceFit, col, el, row, spacer, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit};
+use rune_kit::Kit;
 use serde_json::Value;
 
 use crate::app::{App, Tab};
 use crate::derive::Earshot;
-use crate::ui::widgets;
+use crate::ui::{px, widgets};
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
-    let c = &k.c;
     let id = t.spec.items.get(t.active).cloned().unwrap_or_default();
     let e = s.entry(&id);
 
-    let mut members = row().key("render-members").gap(6.0);
-    for (pos, &m) in t.shown().iter().enumerate() {
-        let on = m == t.active;
-        let name = s.entry(&t.spec.items[m]).map_or_else(|| "…".to_owned(), |e| e.item.name.clone());
-        members = members.child(
-            Button::new(format!("{} · {name}", pos + 1))
-                .variant(if on { ButtonVariant::Contrast } else { ButtonVariant::Outline })
-                .control_size(ControlSize::Small)
-                .on_press(move |s: &mut App| s.set_active_member(m))
-                .build(k)
-                .key(format!("render-member-{m}")),
-        );
-    }
-    let head = row().key("render-head").w_full().gap(16.0).center_y().child(spacer()).child(members);
+    let name = e.map_or_else(|| "Render".to_owned(), |e| e.item.name.clone());
+    let sub =
+        if t.spec.items.len() > 1 { format!("{} renders · {} you hear", t.spec.items.len(), t.member_label(t.active)) } else { e.map(|e| e.item.subtitle()).unwrap_or_default() };
+    let head = row()
+        .key("render-head")
+        .w_full()
+        .gap(16.0)
+        .items_end()
+        .child(col().gap(6.0).min_w(0.0).shrink().child(px::title(name)).child(text(sub).font(rune::TextStyle::new(13.0, 400.0)).color(px::SILK).truncate()))
+        .child(spacer())
+        .child(widgets::readouts(e, s.trim_db(t, &id)));
 
     let video_w = (width * 0.55).max(320.0);
     let video_h = video_w * 9.0 / 16.0;
-    let mut stage = el().key("video").w(video_w).h(video_h).radius(k.radius.md).fill(Color::BLACK).clip_rounded(k.radius.md);
+    let mut stage = el().key("video").w(video_w).h(video_h).radius(6.0).fill(Color::BLACK).clip_rounded(6.0).border(1.0, px::LINE);
     if let Some(v) = t.videos.get(t.active) {
         stage = stage.video(v, SurfaceFit::Fit);
     }
@@ -42,47 +38,39 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         None => {
             let busy = e.is_some_and(|e| e.earshot_busy.contains("critique"));
             let id2 = id.clone();
-            card = card.child(widgets::section_title("Scorecard", k)).child(
-                Button::new(if busy { "Running earshot critique…" } else { "Run earshot critique" })
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Small)
-                    .disabled(busy || e.is_none())
-                    .on_press(move |s: &mut App| s.run_earshot(&id2, Earshot::Critique))
-                    .build(k)
-                    .key("run-critique"),
-            );
+            let mut run = px::key(if busy { "RUNNING CRITIQUE…" } else { "RUN EARSHOT CRITIQUE" }, false).key("run-critique");
+            if !busy && e.is_some() {
+                run = run.on_press(move |s: &mut App| s.run_earshot(&id2, Earshot::Critique));
+            }
+            card = card.child(px::label("Scorecard")).child(row().child(run));
         }
     }
 
-    let mut page = crate::ui::widgets::page("render", width).gap(10.0).child(head).child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
+    let mut page = crate::ui::widgets::page("render", width).gap(16.0).child(head);
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }
     if let Some(err) = &t.error {
-        page = page.child(text(err.clone()).font(k.ty.small).color(c.danger.fg).wrap());
+        page = page.child(text(err.clone()).font(rune::TextStyle::new(13.0, 400.0)).color(px::BAD).wrap());
     }
     page = page.child(row().w_full().gap(16.0).child(stage).child(card));
     page = page.child(cut_strip(e.and_then(|e| e.earshot.get("critique")), widgets::tab_secs(s, t), k));
     page = page.child(widgets::wave_strip(s, t, e, "wave", width, 64.0, k));
 
     let sheet = match e.and_then(|e| e.sheet.as_ref()) {
-        Some(px) => {
-            let (w, h) = px.size();
+        Some(pic) => {
+            let (w, h) = pic.size();
             let sh = if w > 0 { width * h as f32 / w as f32 } else { 200.0 };
-            el().key("sheet").w_full().h(sh).pixels(px)
+            el().key("sheet").w_full().h(sh).pixels(pic)
         }
         None => {
             let busy = e.is_some_and(|e| e.earshot_busy.contains("sheet"));
             let id3 = id.clone();
-            row().key("sheet").gap(8.0).child(
-                Button::new(if busy { "Drawing the sheet…" } else { "Draw earshot sheet" })
-                    .variant(ButtonVariant::Outline)
-                    .control_size(ControlSize::Small)
-                    .disabled(busy || e.is_none())
-                    .on_press(move |s: &mut App| s.run_sheet(&id3))
-                    .build(k)
-                    .key("run-sheet"),
-            )
+            let mut draw = px::key(if busy { "DRAWING THE SHEET…" } else { "DRAW EARSHOT SHEET" }, false).key("run-sheet");
+            if !busy && e.is_some() {
+                draw = draw.on_press(move |s: &mut App| s.run_sheet(&id3));
+            }
+            row().key("sheet").gap(8.0).child(draw)
         }
     };
     page.child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(sheet))
@@ -90,7 +78,6 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
 
 /// The verdict, score, the metrics outside their range and the first fixes.
 fn critique(v: &Value, k: &Kit) -> El {
-    let c = &k.c;
     let verdict = v.get("verdict").and_then(Value::as_str).unwrap_or("–").to_owned();
     let score = v.get("score").and_then(Value::as_f64).map_or("–".into(), |s| format!("{s:.2}"));
     let mut out = col().gap(8.0).child(widgets::section_title("Scorecard", k)).child(
@@ -117,9 +104,9 @@ fn critique(v: &Value, k: &Kit) -> El {
             list = list.child(
                 row()
                     .gap(8.0)
-                    .child(text(name).font(k.ty.small).color(c.text_muted).w(150.0).truncate())
-                    .child(text(val).font(k.ty.small.features("'tnum' 1")).color(c.warning.fg).w(70.0))
-                    .child(text(range).font(k.ty.small).color(c.text_faint)),
+                    .child(text(name).font(px::pixel(10.0)).color(px::FAINT).w(150.0).truncate())
+                    .child(text(val).font(px::pixel(11.0)).color(px::CLOSE).w(70.0))
+                    .child(text(range).font(px::pixel(10.0)).color(px::OFF)),
             );
         }
         out = out.child(list);
@@ -128,7 +115,7 @@ fn critique(v: &Value, k: &Kit) -> El {
         let mut list = col().gap(3.0).child(widgets::section_title("Fixes", k));
         for a in acts.iter().take(6) {
             let line = a.get("action").and_then(Value::as_str).map_or_else(|| a.to_string(), str::to_owned);
-            list = list.child(text(format!("• {line}")).font(k.ty.small).color(c.text_base).wrap());
+            list = list.child(text(format!("• {line}")).font(rune::TextStyle::new(13.0, 400.0)).color(px::SOFT).wrap());
         }
         out = out.child(list);
     }
@@ -145,14 +132,13 @@ fn fmt(v: &Value) -> String {
 
 /// Every picture cut as a tick: with a hit (green), with some sound but no hit (amber), or
 /// silent (red), from the critique's `events`.
-fn cut_strip(critique: Option<&Value>, total: f64, k: &Kit) -> El {
-    let c = &k.c;
-    let mut strip = el().key("cuts").w_full().h(22.0).radius(4.0).fill(c.layer_01);
+fn cut_strip(critique: Option<&Value>, total: f64, _k: &Kit) -> El {
+    let mut strip = el().key("cuts").w_full().h(22.0).radius(3.0).fill(px::SCREEN);
     let Some(cuts) = critique.and_then(cuts_of) else {
-        return strip.child(text("Cuts show here once earshot critique has run on a video.").font(k.ty.small).color(c.text_faint).px(8.0).py(3.0));
+        return strip.child(text("Cuts show here once earshot critique has run on a video.").font(px::pixel(10.0)).color(px::FAINT).px(8.0).py(4.0));
     };
     if total <= 0.0 || cuts.is_empty() {
-        return strip.child(text("No picture cuts found.").font(k.ty.small).color(c.text_faint).px(8.0).py(3.0));
+        return strip.child(text("No picture cuts found.").font(px::pixel(10.0)).color(px::FAINT).px(8.0).py(4.0));
     }
     let mut shape = rune::Shape::new();
     for (t, kind) in &cuts {

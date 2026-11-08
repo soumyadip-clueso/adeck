@@ -19,6 +19,10 @@ use rune::{AppSpec, Chrome};
 
 use app::App;
 
+/// Geist for text, Geist Mono for values, Geist Pixel for labels, numbers and titles (all SIL
+/// Open Font License; see assets/fonts).
+const FONTS: &[&[u8]] = &[include_bytes!("../assets/fonts/Geist.ttf"), include_bytes!("../assets/fonts/GeistMono.ttf"), include_bytes!("../assets/fonts/GeistPixel.ttf")];
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(r) = dock::dump(&args) {
@@ -30,8 +34,8 @@ fn main() {
     }
     rune::prewarm_gpu();
     let spec = AppSpec {
-        fonts: rune_theme_opencode::FONTS,
-        families: rune_theme_opencode::FAMILIES,
+        fonts: FONTS,
+        families: ("Geist", "Geist Mono"),
         setup: Some(|s: &mut App, w| s.setup(w)),
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),

@@ -37,7 +37,8 @@ pub fn frame(png: &[u8], dark: bool, scale: u32) -> Result<Vec<u8>, String> {
     let radius = 12.0 * scale as f32;
 
     // Backdrop: a diagonal blend of the icon's blue and orange, deep in dark mode, pale in light.
-    let stops: [[f32; 3]; 3] = if dark { [[22.0, 32.0, 64.0], [52.0, 36.0, 92.0], [110.0, 52.0, 40.0]] } else { [[214.0, 228.0, 255.0], [236.0, 226.0, 252.0], [255.0, 222.0, 200.0]] };
+    let stops: [[f32; 3]; 3] =
+        if dark { [[22.0, 32.0, 64.0], [52.0, 36.0, 92.0], [110.0, 52.0, 40.0]] } else { [[214.0, 228.0, 255.0], [236.0, 226.0, 252.0], [255.0, 222.0, 200.0]] };
     let mut out = RgbaImage::from_fn(cw, ch, |x, y| {
         let t = ((x as f32 / cw as f32) * 0.6 + (y as f32 / ch as f32) * 0.4).clamp(0.0, 1.0);
         let (a, b, f) = if t < 0.5 { (stops[0], stops[1], t * 2.0) } else { (stops[1], stops[2], (t - 0.5) * 2.0) };
@@ -119,7 +120,8 @@ pub fn keep(png: &[u8], label: &str) -> Result<PathBuf, String> {
     let dir = dirs_pictures().join("adeck");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make {}: {e}", dir.display()))?;
     let stamp = Command::new("date").arg("+%Y-%m-%d at %H.%M.%S").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
-    let slug: String = label.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { ' ' }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+    let slug: String =
+        label.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { ' ' }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
     let path = dir.join(format!("adeck {slug} {stamp}.png"));
     std::fs::write(&path, png).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
     let script = format!("set the clipboard to (read (POSIX file \"{}\") as «class PNGf»)", path.display().to_string().replace('"', "\\\""));

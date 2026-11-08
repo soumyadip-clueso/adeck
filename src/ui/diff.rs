@@ -40,7 +40,18 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     for (m, (up, down, mean)) in d.metrics.iter().zip(d.tally()) {
         let mut cell = col().w(cell_w).gap(1.0).child(text(m.label().to_owned()).font(k.ty.small_medium).color(c.text_base).truncate());
         if m.better.is_some() {
-            cell = cell.child(text(format!("{up} better · {down} worse")).font(k.ty.small.features("'tnum' 1")).color(if up > down { c.success.fg } else if down > up { c.danger.fg } else { c.text_muted }).truncate());
+            cell = cell.child(
+                text(format!("{up} better · {down} worse"))
+                    .font(k.ty.small.features("'tnum' 1"))
+                    .color(if up > down {
+                        c.success.fg
+                    } else if down > up {
+                        c.danger.fg
+                    } else {
+                        c.text_muted
+                    })
+                    .truncate(),
+            );
         }
         if let Some(x) = mean {
             cell = cell.child(text(format!("mean {}", signed(x))).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).truncate());
@@ -92,7 +103,13 @@ fn signed(x: f64) -> String {
 }
 
 fn plain(x: f64) -> String {
-    if x.abs() >= 100.0 { format!("{x:.0}") } else if x.abs() >= 10.0 { format!("{x:.1}") } else { format!("{x:.2}") }
+    if x.abs() >= 100.0 {
+        format!("{x:.0}")
+    } else if x.abs() >= 10.0 {
+        format!("{x:.1}")
+    } else {
+        format!("{x:.2}")
+    }
 }
 
 fn cell(_d: &Diff, m: &Metric, r: &board::DiffRow, w: f32, narrow: bool, k: &Kit) -> El {

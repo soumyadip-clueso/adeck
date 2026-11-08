@@ -3,14 +3,16 @@
 pub mod board;
 pub mod compare;
 pub mod diff;
-pub mod pads;
-pub mod keys;
-pub mod palette;
-pub mod shared;
-pub mod sheet;
 pub mod icons;
+pub mod keys;
+pub mod pads;
+pub mod palette;
+pub mod pane;
+pub mod player;
+pub mod px;
 pub mod render;
 pub mod run;
+pub mod shared;
 pub mod single;
 pub mod statusbar;
 pub mod widgets;
@@ -21,56 +23,65 @@ use rune_kit::{Kit, Toast, ToastRegion};
 
 use crate::app::{App, TabKind};
 
-pub fn kit(dark: bool) -> &'static Kit {
-    rune_theme_opencode::kit(dark)
+/// adeck's kit. It's always the dark sampler look; `_dark` stays for callers that pass the
+/// system appearance.
+pub fn kit(_dark: bool) -> &'static Kit {
+    px::kit()
 }
-
-pub const PAD: f32 = 16.0;
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let k = kit(cx.system_dark());
-    let c = &k.c;
     let mut layer = Vec::new();
     let titlebar = titlebar(s, cx, k, &mut layer);
-    let width = cx.layout_size("body").map_or(1240.0, |z| z[0]) - 2.0 * PAD;
+    let full_w = cx.layout_size("body").map_or(1280.0, |z| z[0]);
     let body = match s.current() {
         None => empty(s, k),
-        Some(t) => match t.spec.kind {
-            TabKind::Single => single::build(s, t, width, k),
-            TabKind::Compare => compare::build(s, t, width, k),
-            TabKind::Render => render::build(s, t, width, k),
-            TabKind::Run => run::build(s, t, k),
-            TabKind::Board => {
-                let main_w = sheet::main_width(s, t, width);
-                let main = if t.board().is_some_and(crate::board::Board::is_pads) { pads::build(s, t, main_w, k) } else { board::build(s, t, main_w, k) };
-                sheet::wrap(s, t, main, width, k)
-            }
-            TabKind::Diff => diff::build(s, t, width, k),
-            TabKind::Shared => shared::build(s, t, width, k),
-        },
+        Some(t) => {
+            let width = full_w - pane::taken(s, t, full_w) - 2.0 * PAGE_X;
+            let page = match t.spec.kind {
+                TabKind::Single => single::build(s, t, width, k),
+                TabKind::Compare => compare::build(s, t, width, k),
+                TabKind::Render => render::build(s, t, width, k),
+                TabKind::Run => run::build(s, t, k),
+                TabKind::Board if t.board().is_some_and(crate::board::Board::is_pads) => pads::build(s, t, width, k),
+                TabKind::Board => board::build(s, t, width, k),
+                TabKind::Diff => diff::build(s, t, width, k),
+                TabKind::Shared => shared::build(s, t, width, k),
+            };
+            // Narrow windows scroll the whole page rather than squeezing the strips.
+            let page = if width < 620.0 && matches!(t.spec.kind, TabKind::Single | TabKind::Compare | TabKind::Render) {
+                col().key("narrow-scroll").w_full().h_full().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(page)
+            } else {
+                page
+            };
+            let page = col().key("page").grow(1.0).min_w(0.0).h_full().min_h(0.0).px(PAGE_X).pt(24.0).pb(16.0).child(page);
+            pane::wrap(s, t, page, full_w, k)
+        }
     };
-    // Narrow windows scroll the whole page rather than squeezing the strips.
-    let body = match s.current().map(|t| t.spec.kind) {
-        Some(TabKind::Single | TabKind::Compare | TabKind::Render) if width < 620.0 => col().key("narrow-scroll").w_full().h_full().min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(body),
-        _ => body,
-    };
-    let footer_w = cx.layout_size("statusbar").map_or(1280.0, |z| z[0]);
     if let Some([w, h]) = cx.layout_size("root") {
         s.win.set((w, h, cx.system_dark()));
     }
-    let mut root = col().key("root").w_full().h_full().fill(c.page).child(titlebar).child(col().key("body").w_full().grow(1.0).min_h(0.0).px(PAD).pt(10.0).pb(10.0).child(body));
+    let mut root = col().key("root").w_full().h_full().fill(px::CASE).child(titlebar).child(col().key("body").w_full().grow(1.0).min_h(0.0).child(body));
     if let Some(a) = statusbar::activity(s, k) {
         root = root.child(a);
     }
-    root = root.child(statusbar::build(s, footer_w, k));
+    if !s.jobs.list().is_empty() {
+        root = root.child(statusbar::build(s, full_w, k));
+    }
+    if let Some(t) = s.current().filter(|t| player::has_player(t)) {
+        root = root.child(player::build(s, t, k));
+    }
     if let Some((msg, err)) = &s.toast {
         let t = Toast::new("toast", msg.clone()).icon(k, if *err { &icons::WARNING } else { &icons::CHECK }).closable().on_close(|s: &mut App| s.toast = None).build(k);
         layer.push(el().absolute(0.0, 0.0).w_full().h_full().inert().child(ToastRegion::new().toast(t).build(k)));
     }
-    keys::build(s, footer_w, k, &mut layer);
-    palette::build(s, footer_w, k, &mut layer);
+    keys::build(s, full_w, k, &mut layer);
+    palette::build(s, full_w, k, &mut layer);
     root.children(layer).on_drop_files(|s: &mut App, files, _| s.open_files(files.to_vec())).accepts_files(|p: &std::path::Path| crate::item::media_of(p).is_some() || p.is_dir())
 }
+
+/// The page's side padding.
+pub const PAGE_X: f32 = 28.0;
 
 fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
     let items: Vec<TabItem<'_, App>> = s
@@ -109,15 +120,14 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         .on_reorder(|s: &mut App, r, _tx: &mut Tx| s.reorder(&r.id, r.to))
         .trailing_action(new_menu(s, k, layer))
         .build_layered(k, layer);
-    let mcp = row()
-        .key("mcp-status")
-        .gap(6.0)
-        .center_y()
-        .px(8.0)
-        .child(el().size(7.0, 7.0).radius(4.0).fill(if s.calls.is_some() { k.c.success.icon } else { k.c.icon_faint }))
-        .child(text(s.mcp_status.clone()).font(k.ty.small).color(k.c.text_muted))
-        .help("Connect with: claude mcp add --transport http adeck http://127.0.0.1:<port>/mcp");
-    let trailing = row().gap(10.0).center_y().child(mcp);
+    // The agent's connection only shows when it's down; ⌘K is the way in to everything else.
+    let mut trailing = row().gap(14.0).center_y().pr(4.0);
+    if s.calls.is_none() {
+        trailing = trailing.child(px::lamp("MCP OFF", px::BAD).key("mcp-status").help(s.mcp_status.clone()));
+    }
+    trailing = trailing.child(
+        text("⌘K").key("palette-hint").font(px::pixel(11.0)).color(px::OFF).cursor(rune::Cursor::Pointer).help("Every command · ⌘K").on_press(|s: &mut App| palette::open(s)),
+    );
     WindowTitlebar::from_insets(cx.chrome_insets(), 1.0).tabs(strip).trailing(trailing).build(k)
 }
 
@@ -237,32 +247,54 @@ pub fn drop_zone(msg: &str, k: &Kit) -> El {
         .child(
             row()
                 .gap(8.0)
-                .child(rune_kit::Button::new("Open file…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare))).build(k).key("dz-file"))
-                .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("dz-folder")),
+                .child(
+                    rune_kit::Button::new("Open file…")
+                        .variant(rune_kit::ButtonVariant::Outline)
+                        .on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare)))
+                        .build(k)
+                        .key("dz-file"),
+                )
+                .child(
+                    rune_kit::Button::new("Open folder…")
+                        .variant(rune_kit::ButtonVariant::Outline)
+                        .on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx))
+                        .build(k)
+                        .key("dz-folder"),
+                ),
         )
 }
 
-fn empty(s: &App, k: &Kit) -> El {
-    let c = &k.c;
-    let hint = format!("claude mcp add --transport http adeck http://127.0.0.1:{}/mcp", s.cfg.port);
+fn empty(s: &App, _k: &Kit) -> El {
+    // adeck's mark: a lowercase "a" on a dot-matrix screen.
+    const MARK: [&str; 8] = ["........", "..####..", "......#.", "..#####.", ".#....#.", ".#....#.", "..#####.", "........"];
+    let mut mark = rune::col().key("mark").gap(4.0).px(14.0).py(14.0).radius(10.0).fill(px::SCREEN).border(1.0, px::LINE);
+    for line in MARK {
+        let mut r = row().gap(4.0);
+        for ch in line.chars() {
+            r = r.child(rune::el().size(10.0, 10.0).radius(5.0).fill(if ch == '#' { px::LED } else { px::GRILLE }));
+        }
+        mark = mark.child(r);
+    }
+    let hint = |keys: &str, what: &str| row().gap(8.0).center_y().child(px::key(keys, false)).child(px::label(what));
+    let mcp = format!("claude mcp add --transport http adeck http://127.0.0.1:{}/mcp", s.cfg.port);
     col()
         .key("empty")
         .w_full()
         .grow(1.0)
         .center()
-        .gap(8.0)
-        .child(rune::icon(&icons::DROP, 26.0).color(c.icon_faint))
-        .child(text("Nothing open").font(k.ty.ui_medium).color(c.text_base))
-        .child(text("Ask your agent to open files, a compare or a run. Or drop audio and video here.").font(k.ty.small).color(c.text_muted))
+        .gap(20.0)
+        .child(mark)
+        .child(text("DROP AUDIO HERE").font(px::pixel(28.0)).color(px::LED))
+        .child(text("Or ask your agent to open files, a compare or a run.").font(rune::TextStyle::new(13.0, 400.0)).color(px::SILK))
         .child(
             row()
                 .gap(8.0)
-                .py(4.0)
-                .child(rune_kit::Button::new("Open file…").variant(rune_kit::ButtonVariant::Contrast).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_files(tx, false)).build(k).key("empty-file"))
-                .child(rune_kit::Button::new("Open folder…").variant(rune_kit::ButtonVariant::Outline).on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)).build(k).key("empty-folder"))
-                .child(rune_kit::Button::new("New compare").variant(rune_kit::ButtonVariant::Outline).on_press(|s: &mut App| s.new_compare()).build(k).key("empty-compare")),
+                .child(px::key("OPEN FILE…", true).key("empty-file").on_press_tx(|_s: &mut App, tx: &mut Tx| pick_files(tx, false)))
+                .child(px::key("OPEN FOLDER…", false).key("empty-folder").on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx)))
+                .child(px::key("NEW COMPARE", false).key("empty-compare").on_press(|s: &mut App| s.new_compare())),
         )
-        .child(text(hint).font(rune::TextStyle { size: 11.0, ..k.ty.mono }).color(c.text_faint).selectable(true).py(6.0))
+        .child(row().gap(20.0).pt(8.0).child(hint("⌘O", "Open")).child(hint("⌘K", "Commands")).child(hint("?", "Keys")))
+        .child(text(mcp).font(rune::TextStyle::new(11.0, 400.0).mono()).color(px::OFF).selectable(true).pt(8.0))
 }
 
 pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
@@ -316,6 +348,10 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if plain && ev.key == rune::Key::Text("/".into()) && focus_search(s) {
         return true;
     }
+    if plain && ev.key == rune::Key::Text("\\".into()) {
+        s.toggle_pane();
+        return true;
+    }
     if matches!(kind, TabKind::Run | TabKind::Diff | TabKind::Shared) {
         return false;
     }
@@ -361,7 +397,7 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
                 "=" | "+" => s.zoom(0.5),
                 "-" => s.zoom(2.0),
                 "f" => s.zoom_fit(),
-                "n" => s.toggle_note(),
+                "n" => s.show_note(),
                 "s" => s.send_to_agent(None, tx),
                 "[" => s.pan(-0.5),
                 _ => s.pan(0.5),
@@ -370,6 +406,14 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         rune::Key::Enter if kind == TabKind::Compare => {
             s.pick();
+            return true;
+        }
+        rune::Key::Text(ch) if kind == TabKind::Compare && (ch == "b" || ch == "m") => {
+            if ch == "b" {
+                s.toggle_blind();
+            } else {
+                s.toggle_loudness_match();
+            }
             return true;
         }
         rune::Key::Text(ch) if ch.len() == 1 => {
@@ -416,7 +460,7 @@ fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
             if s.current().is_some_and(|t| t.loop_secs.is_some()) {
                 s.set_loop(None);
             } else {
-                s.toggle_sheet();
+                s.toggle_pane();
             }
         }
         rune::Key::Text(ch) if ch.chars().count() == 1 => {

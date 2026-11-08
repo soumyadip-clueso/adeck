@@ -32,17 +32,7 @@ const TILE: (f32, f32, f32) = (100.0, 924.0, 178.0);
 const INK: (u8, u8, u8) = (0xf2, 0xf2, 0xf2);
 
 /// The mark: a lowercase a.
-const MARK: [&str; N] = [
-    ".........",
-    ".........",
-    "..#####..",
-    ".......#.",
-    "..######.",
-    ".#.....#.",
-    ".#.....#.",
-    "..######.",
-    ".........",
-];
+const MARK: [&str; N] = [".........", ".........", "..#####..", ".......#.", "..######.", ".#.....#.", ".#.....#.", "..######.", "........."];
 
 fn mark() -> [[f32; N]; N] {
     let mut g = [[DIM; N]; N];
@@ -75,7 +65,8 @@ pub struct Meter {
 
 impl Default for Meter {
     fn default() -> Self {
-        let mut m = Meter { v: [0.2; N], vel: [0.0; N], tgt: [0.2; N], until: [0.0; N], peak: [0.0; N], w: [1.0, 0.0, 0.0], mode: 0, t: 0.0, next: 5.0, phase: 0.0, seed: 0x9e37_79b9 };
+        let mut m =
+            Meter { v: [0.2; N], vel: [0.0; N], tgt: [0.2; N], until: [0.0; N], peak: [0.0; N], w: [1.0, 0.0, 0.0], mode: 0, t: 0.0, next: 5.0, phase: 0.0, seed: 0x9e37_79b9 };
         for i in 0..N {
             m.retarget(i, 1.0);
         }
@@ -161,7 +152,6 @@ impl Meter {
         g
     }
 }
-
 
 /// Draws a dot grid on the tile.
 pub fn draw_grid(g: &[[f32; N]; N], size: u32) -> Pixmap {
