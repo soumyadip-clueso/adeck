@@ -10,7 +10,7 @@ use crate::app::{App, Tab};
 use crate::ui::{px, widgets};
 
 /// The lane's letter column.
-const LETTER_W: f32 = 40.0;
+const LETTER_W: f32 = 44.0;
 const GAP: f32 = 4.0;
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
@@ -93,14 +93,14 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     // The spectrogram of the one you hear.
     let active_id = t.spec.items.get(t.active).cloned().unwrap_or_default();
     let spec = widgets::spec_strip(s, t, s.entry(&active_id), "spec", if narrow { width } else { strip_w }, spec_h, k);
+    // The spectrogram's label: which take it shows, as a small lit key.
     let letter = col()
         .w(LETTER_W)
         .h(spec_h)
-        .py(6.0)
-        .pl(2.0)
-        .child(text("SPEC").font(px::pixel(10.0)).color(px::FAINT))
-        .child(spacer())
-        .child(text(t.member_label(t.active)).font(px::pixel(13.0)).color(px::LED));
+        .center()
+        .gap(6.0)
+        .child(text("SPEC").font(px::pixel(9.0)).color(px::FAINT))
+        .child(row().size(26.0, 26.0).center().radius(4.0).border(1.0, px::SOFT).child(text(t.member_label(t.active)).font(px::pixel(13.0)).color(px::LED)));
     lanes = lanes.child(if narrow { spec } else { row().w_full().gap(GAP).pt(6.0).child(letter).child(col().grow(1.0).min_w(0.0).child(spec)) });
     page.child(lanes)
 }
@@ -149,19 +149,37 @@ fn lane(s: &App, t: &Tab, m: usize, pos: usize, strip_w: f32, lane_h: f32, narro
         wave = wave.opacity(0.6);
     }
     let wave = wave.opacity_motion(rune::Spring::SNAPPY);
+    // Its key: a hardware pad, lit white for the take you hear (amber edge while it sounds),
+    // with the number key that switches to it under it.
+    let playing = on && s.mixer_is_for(t.id()) && s.mixer.is_playing();
+    let cap = row()
+        .size(38.0, 38.0)
+        .center()
+        .radius(6.0)
+        .fill(if on { px::LED } else { px::SCREEN })
+        .border(
+            if playing { 2.0 } else { 1.0 },
+            if playing {
+                px::AMBER
+            } else if on {
+                px::LED
+            } else {
+                px::GRILLE
+            },
+        )
+        .child(text(label.clone()).font(px::pixel(22.0)).color(if on { px::CASE } else { px::SILK }));
     let letter = col()
         .key(format!("member-{m}"))
         .w(LETTER_W)
         .h(lane_h)
-        .py(8.0)
-        .pl(2.0)
+        .center()
+        .gap(6.0)
         .cursor(rune::Cursor::Pointer)
         .role("button")
         .label(format!("Listen to {label}"))
         .help(format!("Listen to {label} · press {} · double-click sends it to the agent", pos + 1))
-        .child(text(label.clone()).font(px::pixel(28.0)).color(if on { px::LED } else { px::OFF }))
-        .child(spacer())
-        .child(text(format!("{}", pos + 1)).font(px::pixel(11.0)).color(if on { px::FAINT } else { px::OFF }))
+        .child(cap)
+        .child(text(format!("{}", pos + 1)).font(px::pixel(10.0)).color(if on { px::SILK } else { px::OFF }))
         .on_press(move |s: &mut App| s.set_active_member(m))
         .on_double_press_tx(move |s: &mut App, tx: &mut rune::Tx| s.send_to_agent(Some(m), tx));
     if narrow {
