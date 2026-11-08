@@ -76,6 +76,7 @@ pub fn everything(s: &App) -> Vec<Hit> {
     if kind == Some(TabKind::Board) {
         v.push(cmd("Waveforms sheet", "Waveform, spectrogram and targets for what's playing", "Esc", &icons::WAVE, "sheet"));
     }
+    v.push(cmd("Keyboard shortcuts", "Every key, this tab's first", "?", &icons::SPARK, "keys"));
     if t.is_some() {
         v.push(cmd("Close tab", "", "⌘W", &icons::CLOSE, "close"));
     }
@@ -188,6 +189,7 @@ fn run(s: &mut App, act: &Act, tx: &mut Tx) {
             "match" => s.toggle_loudness_match(),
             "fit" => s.zoom_fit(),
             "sheet" => s.toggle_sheet(),
+            "keys" => crate::ui::keys::toggle(s),
             "close" => {
                 if let Some(a) = s.active {
                     s.close(a);
@@ -296,18 +298,9 @@ pub fn build(s: &App, width: f32, k: &Kit, layer: &mut Vec<El>) {
         .child(row().w_full().px(12.0).py(6.0).border_sides([0.0, 0.0, 1.0, 0.0], c.border_weak).child(field))
         .child(col().w_full().max_h(420.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
         .child(foot);
-    layer.push(
-        col()
-            .key("pal-scrim")
-            .absolute(0.0, 0.0)
-            .w_full()
-            .h_full()
-            .fill(Color::BLACK.alpha(0.32))
-            .transition(rune::Transition::opacity())
-            .modal(true, |s: &mut App| s.palette = None)
-            .child(el().h(90.0))
-            .child(row().w_full().child(spacer()).child(panel).child(spacer())),
-    );
+    let panel = panel.modal(true, |s: &mut App| s.palette = None);
+    layer.push(col().key("pal-scrim").absolute(0.0, 0.0).w_full().h_full().fill(Color::BLACK.alpha(0.4)).transition(rune::Transition::opacity()).a11y_hidden());
+    layer.push(col().key("pal-layer").absolute(0.0, 0.0).w_full().h_full().child(el().h(90.0)).child(row().w_full().child(spacer()).child(panel).child(spacer())));
 }
 
 fn hit_row(h: &Hit, i: usize, on: bool, k: &Kit) -> El {
@@ -346,12 +339,12 @@ fn hit_row(h: &Hit, i: usize, on: bool, k: &Kit) -> El {
     r.on_press_tx(move |s: &mut App, tx: &mut Tx| run(s, &act, tx))
 }
 
-fn keycap(t: &str, k: &Kit) -> El {
+pub(crate) fn keycap(t: &str, k: &Kit) -> El {
     let c = &k.c;
     row().px(5.0).h(20.0).min_w(20.0).center().radius(5.0).border(1.0, c.border_weak).fill(c.layer_02).child(text(t.to_owned()).font(k.ty.small_medium).color(c.text_muted))
 }
 
-fn hint(key: &str, what: &str, k: &Kit) -> El {
+pub(crate) fn hint(key: &str, what: &str, k: &Kit) -> El {
     row().gap(6.0).center_y().child(keycap(key, k)).child(text(what.to_owned()).font(k.ty.small).color(k.c.text_faint))
 }
 

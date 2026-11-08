@@ -28,7 +28,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .gap(12.0)
         .center_y()
         .flex_wrap()
-        .child(crate::ui::widgets::search_field(t, "Search shared pages  /", 240.0, k))
+        .child(crate::ui::widgets::search_field(t, "Search shared pages", 240.0, k))
         .child(text(summary).font(k.ty.ui_medium).color(c.text_base))
         .child(status)
         .child(spacer())

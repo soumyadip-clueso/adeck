@@ -8,7 +8,7 @@ use crate::app::{App, TabKind};
 
 type Scene = (&'static str, fn(&mut App));
 
-pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads), ("palette", palette), ("palette-search", palette_search), ("board-search", board_search)];
+pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads), ("palette", palette), ("palette-search", palette_search), ("board-search", board_search), ("keys", keys)];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -194,6 +194,11 @@ fn board_search(s: &mut App) {
     if let Some(t) = s.current_mut() {
         t.filter = rune::TextEdit::new("click");
     }
+}
+
+fn keys(s: &mut App) {
+    board(s);
+    s.keys_help = true;
 }
 
 fn diff(s: &mut App) {
@@ -569,7 +574,33 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(1.0 / 60.0);
         assert!(rt.state.palette.is_none(), "closed after running");
+        crate::ui::palette::open(&mut rt.state);
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        rt.pointer_down(20.0, 760.0);
+        rt.pointer_up(20.0, 760.0);
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.palette.is_none(), "a click outside closes it");
         assert_ne!(rt.state.current().unwrap().spec.blind, was, "blind toggled");
+    }
+
+    #[test]
+    fn the_keys_sheet_opens_from_the_palette_and_puts_this_tabs_keys_first() {
+        let mut rt = rt(board);
+        let hits = crate::ui::palette::results(&rt.state, "keyboard");
+        assert_eq!(hits[0].act, crate::ui::palette::Act::Cmd("keys"));
+        crate::ui::keys::toggle(&mut rt.state);
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("keys-help").is_some(), "the sheet is up");
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+        }
+        let (x, y) = (20.0, 760.0);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+        assert!(!rt.state.keys_help, "a click outside closes it");
     }
 
     #[test]

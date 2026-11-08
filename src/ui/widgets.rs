@@ -641,6 +641,9 @@ pub fn earshot_panel(s: &App, e: &Entry, k: &Kit) -> El {
     }
     panel = panel.child(buttons);
     let _ = s;
+    if e.earshot.is_empty() {
+        panel = panel.child(text("Tags, labels and measurements from earshot show here once you run it.").font(k.ty.small).color(c.text_faint).wrap());
+    }
     if let Some(v) = e.earshot.get("describe") {
         let rows = crate::item::flatten(&crate::app::summarise_earshot(crate::derive::Earshot::Describe, v));
         panel = panel.child(col().w_full().gap(2.0).children(rows.into_iter().take(14).map(|(kk, vv)| {

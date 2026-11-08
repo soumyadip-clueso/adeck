@@ -4,6 +4,7 @@ pub mod board;
 pub mod compare;
 pub mod diff;
 pub mod pads;
+pub mod keys;
 pub mod palette;
 pub mod shared;
 pub mod sheet;
@@ -66,6 +67,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let t = Toast::new("toast", msg.clone()).icon(k, if *err { &icons::WARNING } else { &icons::CHECK }).closable().on_close(|s: &mut App| s.toast = None).build(k);
         layer.push(el().absolute(0.0, 0.0).w_full().h_full().inert().child(ToastRegion::new().toast(t).build(k)));
     }
+    keys::build(s, footer_w, k, &mut layer);
     palette::build(s, footer_w, k, &mut layer);
     root.children(layer).on_drop_files(|s: &mut App, files, _| s.open_files(files.to_vec())).accepts_files(|p: &std::path::Path| crate::item::media_of(p).is_some() || p.is_dir())
 }
@@ -275,6 +277,16 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if s.palette.is_some() {
         return false;
+    }
+    if s.keys_help {
+        if ev.key == rune::Key::Escape || ev.key == rune::Key::Text("?".into()) {
+            s.keys_help = false;
+        }
+        return true;
+    }
+    if !ev.mods.cmd && !ev.mods.ctrl && ev.key == rune::Key::Text("?".into()) {
+        keys::toggle(s);
+        return true;
     }
     if ev.is_command('t') {
         s.open_new_menu();

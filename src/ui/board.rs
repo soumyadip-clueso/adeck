@@ -28,7 +28,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     for (tone, n) in b.tally() {
         tally = tally.child(row().gap(5.0).center_y().child(chip(&Chip { text: n.to_string(), tone: tone.clone() }, k)).child(text(tone_word(&tone)).font(k.ty.small).color(c.text_muted)));
     }
-    let head = row().key("board-head").w_full().gap(14.0).center_y().flex_wrap().child(widgets::search_field(t, "Search groups and sounds  /", 240.0, k)).child(tally).child(spacer()).child(blind).child(lm).child(zoom);
+    let head = row().key("board-head").w_full().gap(14.0).center_y().flex_wrap().child(widgets::search_field(t, "Search groups and sounds", 240.0, k)).child(tally).child(spacer()).child(blind).child(lm).child(zoom);
 
     let mut page = col().key("board").w_full().h_full().min_h(0.0).gap(10.0).child(head).child(widgets::transport(s, t, k)).child(widgets::note_field(t, k));
     if let Some(a) = widgets::annotation(t, k) {

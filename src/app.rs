@@ -339,6 +339,7 @@ pub struct App {
     pub shooting: bool,
     /// ⌘K, while open.
     pub palette: Option<crate::ui::palette::State>,
+    pub keys_help: bool,
     /// Pages shared from adeck, newest first.
     pub shares: Vec<crate::share::Share>,
     /// A share being published; slugs being taken down; the slug whose take-down awaits a second press.
@@ -393,6 +394,7 @@ impl App {
             win: std::cell::Cell::new((1280.0, 800.0, true)),
             shooting: false,
             palette: None,
+            keys_help: false,
             shares: crate::share::load(),
             sharing: false,
             unsharing: HashSet::new(),

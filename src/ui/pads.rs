@@ -35,7 +35,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         .gap(14.0)
         .center_y()
         .flex_wrap()
-        .child(widgets::search_field(t, "Search sounds  /", 200.0, k))
+        .child(widgets::search_field(t, "Search sounds", 200.0, k))
         .child(stop)
         .child(widgets::meter(s, k))
         .child(widgets::volume(s, k))
