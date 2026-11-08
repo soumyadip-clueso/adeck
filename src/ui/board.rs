@@ -21,17 +21,16 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         return text("This board is empty.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT);
     };
     let blind = px::toggle("Blind", t.spec.blind).key("blind").help("Hide which is which in each group until you pick · B").on_press(|s: &mut App| s.toggle_blind());
-    let lm = px::toggle("Match loudness", t.spec.loudness_match).key("match").help("Trim every take to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match());
-    let zoom = px::toggle("Zoom to sound", t.zoom_sound).key("zoom").help("Strips show just the sound, not the silence · Z").on_press(|s: &mut App| s.toggle_zoom());
+    let lm = px::toggle("Match", t.spec.loudness_match).key("match").help("Match loudness: trim every take to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match());
+    let zoom = px::toggle("Zoom", t.zoom_sound).key("zoom").help("Zoom to the sound: strips show just the sound, not the silence · Z").on_press(|s: &mut App| s.toggle_zoom());
     let mut tally = row().gap(14.0).center_y();
     for (tone, n) in b.tally() {
         tally = tally.child(px::lamp(&format!("{n} {}", tone_word(&tone)), tone_ink(&tone)));
     }
-    let title = col().gap(8.0).min_w(0.0).shrink().child(px::title(t.spec.label.clone().unwrap_or_else(|| "Board".into()))).child(tally);
-    let head = row().key("board-head").w_full().gap(16.0).items_end().flex_wrap().child(title).child(spacer()).child(row().gap(8.0).flex_wrap().child(blind).child(lm).child(zoom));
-    let tools = row().w_full().child(widgets::search_field(t, "Search groups and sounds", 280.0, k));
+    let tools = row().gap(8.0).center_y().child(widgets::search_field(t, "Search", 200.0, k)).child(blind).child(lm).child(zoom);
+    let head = px::header("board-head", t.spec.label.clone().unwrap_or_else(|| "Board".into()), tally, tools);
 
-    let mut page = col().key("board").w_full().h_full().min_h(0.0).gap(14.0).child(head).child(tools);
+    let mut page = col().key("board").w_full().h_full().min_h(0.0).gap(14.0).child(head);
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }

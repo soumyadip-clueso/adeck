@@ -31,9 +31,9 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         if !t.spec.revealed {
             blind = blind.on_press(|s: &mut App| s.toggle_blind());
         }
-        toggles = toggles
-            .child(blind)
-            .child(px::toggle("Match loudness", t.spec.loudness_match).key("match").help("Trim every take to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match()));
+        toggles = toggles.child(blind).child(
+            px::toggle("Match", t.spec.loudness_match).key("match").help("Match loudness: trim every take to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match()),
+        );
     }
     toggles = toggles.child(
         row()

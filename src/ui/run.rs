@@ -2,7 +2,7 @@
 //! Filter by any text, show only what you haven't scored, Return opens a row, and a selection of
 //! several opens as a compare.
 
-use rune::{El, Tx, col, row, spacer, text};
+use rune::{El, Tx, col, row, text};
 use rune_kit::{Cell, Kit, Table, TableColumn, TextInput};
 
 use crate::app::{App, Entry, Tab};
@@ -44,9 +44,9 @@ pub fn cell_value(s: &App, e: &Entry, col: &str) -> String {
 
 pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
     let filter = TextInput::new(&t.filter)
-        .placeholder("Filter by name or any metadata")
+        .placeholder("Filter")
         .leading_icon(&crate::ui::icons::SEARCH)
-        .width(Some(320.0))
+        .width(Some(200.0))
         .clear_button()
         .on_edit(|s: &mut App| &mut s.current_mut().expect("a run tab").filter)
         .on_change(|s: &mut App, _| {
@@ -56,8 +56,8 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
         })
         .build(k)
         .key("filter");
-    let unscored = px::toggle("Unscored only", t.unscored_only)
-        .help("Hide what you've already scored")
+    let unscored = px::toggle("Unscored", t.unscored_only)
+        .help("Show only what you haven't scored · filter matches the name or any metadata")
         .on_press(|s: &mut App| {
             if let Some(t) = s.current_mut() {
                 t.unscored_only ^= true;
@@ -90,9 +90,8 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
     if t.loading {
         count = count.child(row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(12.0).build(k)).child(px::label("Listing…")));
     }
-    let title = col().gap(8.0).min_w(0.0).shrink().child(px::title(t.spec.run.clone().unwrap_or_else(|| "Run".into()))).child(count);
-    let head = row().key("run-head").w_full().gap(16.0).items_end().child(title).child(spacer()).child(open);
-    let tools = row().key("run-tools").w_full().gap(12.0).center_y().child(filter).child(unscored);
+    let tools = row().key("run-tools").gap(8.0).center_y().child(filter).child(unscored).child(open);
+    let head = px::header("run-head", t.spec.run.clone().unwrap_or_else(|| "Run".into()), count, tools);
 
     let table = Table::new(table_state, table_state_mut, rows_len, row_id)
         .column(TableColumn::new("name", "Name").flex(2.0).min(180.0).sortable())
@@ -131,7 +130,7 @@ pub fn build(s: &App, t: &Tab, k: &Kit) -> El {
         .h_full()
         .min_h(0.0);
 
-    let mut page = col().key("run").w_full().h_full().min_h(0.0).gap(14.0).child(head).child(tools);
+    let mut page = col().key("run").w_full().h_full().min_h(0.0).gap(14.0).child(head);
     if let Some(err) = &t.error {
         page = page.child(text(err.clone()).font(rune::TextStyle::new(13.0, 400.0)).color(px::BAD).wrap());
     }

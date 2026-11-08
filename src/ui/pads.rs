@@ -26,14 +26,16 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         };
         tally = tally.child(px::lamp(&format!("{n} {tone}"), ink));
     }
-    let title = col().gap(8.0).min_w(0.0).shrink().child(px::title(t.spec.label.clone().unwrap_or_else(|| "Pads".into()))).child(tally);
     let toggles = row()
         .gap(8.0)
-        .flex_wrap()
+        .center_y()
+        .child(widgets::search_field(t, "Search", 200.0, k))
         .child(px::toggle("Blind", t.spec.blind).key("blind").help("Hide names until you pick · B").on_press(|s: &mut App| s.toggle_blind()))
-        .child(px::toggle("Match loudness", t.spec.loudness_match).key("match").help("Trim every pad to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match()));
-    let head = row().key("pads-head").w_full().gap(16.0).items_end().flex_wrap().child(title).child(spacer()).child(toggles);
-    let mut page = col().key("pads").w_full().h_full().min_h(0.0).gap(14.0).child(head).child(row().w_full().child(widgets::search_field(t, "Search sounds", 280.0, k)));
+        .child(
+            px::toggle("Match", t.spec.loudness_match).key("match").help("Match loudness: trim every pad to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match()),
+        );
+    let head = px::header("pads-head", t.spec.label.clone().unwrap_or_else(|| "Pads".into()), tally, toggles);
+    let mut page = col().key("pads").w_full().h_full().min_h(0.0).gap(14.0).child(head);
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }

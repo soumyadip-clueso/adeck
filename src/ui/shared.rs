@@ -26,16 +26,12 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         Some(Err(e)) => lamps = lamps.child(px::lamp(&format!("Couldn't check: {e}"), px::BAD)),
         _ => {}
     }
-    let title = col().gap(8.0).min_w(0.0).shrink().child(px::title("Shared")).child(lamps);
-    let head = row()
-        .key("shared-head")
-        .w_full()
-        .gap(16.0)
-        .items_end()
-        .child(title)
-        .child(spacer())
+    let tools = row()
+        .gap(8.0)
+        .center_y()
+        .child(crate::ui::widgets::search_field(t, "Search", 200.0, k))
         .child(px::key("REFRESH", false).key("shared-refresh").help("Check which pages are still up").on_press(|s: &mut App| s.check_shares()));
-    let tools = row().w_full().child(crate::ui::widgets::search_field(t, "Search shared pages", 280.0, k));
+    let head = px::header("shared-head", "Shared", lamps, tools);
     let mut list = col().key("shared-list").w_full().gap(8.0).pr(10.0);
     if s.cfg.share.command().is_none() {
         list = list.child(
@@ -64,15 +60,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     if shown.is_empty() && !s.shares.is_empty() {
         list = list.child(text(format!("No shared page matches “{}”.", t.filter.text.trim())).font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).py(16.0));
     }
-    col()
-        .key("shared")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .gap(14.0)
-        .child(head)
-        .child(tools)
-        .child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
+    col().key("shared").w_full().h_full().min_h(0.0).gap(14.0).child(head).child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
 }
 
 fn entry(s: &App, sh: &Share, width: f32) -> El {

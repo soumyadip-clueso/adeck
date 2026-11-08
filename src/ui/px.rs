@@ -56,6 +56,20 @@ pub fn title(s: impl Into<String>) -> El {
     text(s.into().to_uppercase()).font(pixel(30.0)).color(LED).truncate()
 }
 
+/// A page's one header line: the title with its lamps beside it on the left, the search and
+/// switches on the right. It wraps only when the window is too narrow for both.
+pub fn header(key: &str, title_text: impl Into<String>, lamps: El, tools: El) -> El {
+    row()
+        .key(key.to_owned())
+        .w_full()
+        .gap(16.0)
+        .center_y()
+        .flex_wrap()
+        .child(row().gap(18.0).items_end().min_w(0.0).shrink().child(title(title_text)).child(lamps.pb(6.0)))
+        .child(rune::spacer())
+        .child(tools)
+}
+
 /// A readout: label above a pixel number.
 pub fn readout(name: &str, value: String) -> El {
     rune::col().gap(4.0).child(label(name)).child(text(value).font(pixel(22.0)).color(LED))
