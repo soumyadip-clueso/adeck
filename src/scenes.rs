@@ -519,6 +519,46 @@ mod tests {
     }
 
     #[test]
+    fn the_pane_resizes_from_its_edge_and_moves_by_its_grip() {
+        let mut rt = rt(compare);
+        let drag = |rt: &mut Runtime<App>, key: &str, dx: f32| {
+            let ([x, y, w, h], _) = rt.presented(key).unwrap_or_else(|| panic!("{key}"));
+            let (px, py) = (x + w / 2.0, y + h / 2.0);
+            rt.pointer_down(px, py);
+            rt.frame(1.0 / 60.0);
+            for i in 1..=4 {
+                rt.pointer_move(px + dx * i as f32 / 4.0, py);
+                rt.frame(1.0 / 60.0);
+            }
+            rt.pointer_up(px + dx, py);
+            for _ in 0..40 {
+                rt.frame(1.0 / 60.0);
+            }
+        };
+        let before = rt.presented("pane").unwrap().0[2];
+        drag(&mut rt, "pane-resize", -120.0);
+        let after = rt.presented("pane").unwrap().0[2];
+        assert!((after - before - 120.0).abs() < 2.0, "wider by the drag: {before} -> {after}");
+        drag(&mut rt, "pane-grip", -400.0);
+        assert_eq!(rt.state.pane, crate::ui::px::Dock::Left, "dragged across, it docks left");
+    }
+
+    #[test]
+    fn a_toast_closes_on_a_click() {
+        let mut rt = rt(single);
+        rt.state.toast = Some(("Saved score".into(), false));
+        rt.invalidate();
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+        }
+        let ([x, y, w, h], _) = rt.presented("toast").expect("toast up");
+        rt.pointer_down(x + w / 2.0, y + h / 2.0);
+        rt.pointer_up(x + w / 2.0, y + h / 2.0);
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.toast.is_none());
+    }
+
+    #[test]
     fn the_pane_docks_either_side_and_hides_to_an_edge() {
         let mut rt = rt(compare);
         let x = |rt: &mut Runtime<App>, key: &str| rt.presented(key).unwrap_or_else(|| panic!("{key}")).0[0];

@@ -53,7 +53,7 @@ pub fn label(s: impl Into<String>) -> El {
 
 /// A title: the page's name in big round-dot type.
 pub fn title(s: impl Into<String>) -> El {
-    text(s.into().to_uppercase()).font(pixel(40.0)).color(LED).truncate()
+    text(s.into().to_uppercase()).font(pixel(30.0)).color(LED).truncate()
 }
 
 /// A readout: label above a pixel number.

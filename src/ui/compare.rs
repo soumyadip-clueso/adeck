@@ -77,7 +77,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     // Lanes share what's left with the spectrogram of the one you hear.
     let shown = t.shown();
     let (_, win_h, _) = s.win.get();
-    let room = (win_h - 40.0 - 68.0 - 40.0 - 120.0 - if t.spec.note.is_some() { 56.0 } else { 0.0 } - if t.picked.is_some() { 28.0 } else { 0.0 }).max(260.0);
+    let room = (win_h - 40.0 - 68.0 - 40.0 - 66.0 - if t.spec.note.is_some() { 48.0 } else { 0.0 } - if t.picked.is_some() { 28.0 } else { 0.0 }).max(260.0);
     let spec_h = (room * 0.26).clamp(72.0, 200.0);
     let lane_h = ((room - spec_h - 24.0) / shown.len().max(1) as f32 - 6.0).clamp(48.0, 180.0);
 

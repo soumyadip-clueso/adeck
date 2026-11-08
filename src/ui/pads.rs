@@ -151,7 +151,7 @@ fn pad(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32,
     let frac = if playing { secs.filter(|x| *x > 0.0).map_or(0.0, |x| (s.mixer.secs() / x).clamp(0.0, 1.0) as f32) } else { 0.0 };
     const SEGS: usize = 16;
     let lit = (frac * SEGS as f32).round() as usize;
-    let mut bar = row().w_full().h(3.0).gap(2.0);
+    let mut bar = row().key(format!("pad-bar-{}-{m}", g.key)).instant_changes().w_full().h(3.0).gap(2.0);
     for i in 0..SEGS {
         bar = bar.child(el().grow(1.0).w(0.0).h_full().fill(if i < lit {
             px::AMBER

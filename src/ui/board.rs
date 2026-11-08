@@ -163,7 +163,7 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     if let Some(d) = s.decisions.get(&mem.item) {
         top = top.child(text(d.to_uppercase()).font(px::pixel(10.0)).color(if d == "drop" { px::BAD } else { px::SILK }));
     }
-    let mut thumb = el().w_full().h(52.0).radius(3.0).fill(widgets::screen()).clip_rounded(3.0).inert();
+    let mut thumb = el().w_full().h(52.0).radius(3.0).fill(widgets::screen()).clip_rounded(3.0).instant_changes().inert();
     if let Some(e) = e {
         let px = if t.zoom_sound && e.sound.is_some() { &e.zoom } else { &e.thumb };
         if e.analysis.is_some() {

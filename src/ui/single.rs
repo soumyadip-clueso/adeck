@@ -35,7 +35,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     }
     // The screens share what's left: the waveform a bit more than the spectrogram.
     let (_, win_h, _) = s.win.get();
-    let room = (win_h - 40.0 - 68.0 - 40.0 - 150.0 - if t.spec.note.is_some() { 56.0 } else { 0.0 }).max(240.0);
+    let room = (win_h - 40.0 - 68.0 - 40.0 - 110.0 - if t.spec.note.is_some() { 48.0 } else { 0.0 }).max(240.0);
     page.child(
         col()
             .key("screens")

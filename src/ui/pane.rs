@@ -38,7 +38,7 @@ pub fn taken(s: &App, t: &Tab, width: f32) -> f32 {
 const EDGE: f32 = 28.0;
 
 fn pane_w(s: &App, width: f32) -> f32 {
-    s.sheet_w.clamp(MIN_W, (width * 0.5).max(MIN_W))
+    s.sheet_w.clamp(MIN_W, (width * 0.6).max(MIN_W))
 }
 
 fn current(s: &App, t: &Tab) -> &'static str {
@@ -88,13 +88,34 @@ fn build(s: &App, t: &Tab, w: f32, k: &Kit) -> El {
         );
     }
     let left = s.pane == Dock::Left;
+    // Drag the grip across the window to dock the pane on the other side.
     let grip = col()
         .key("pane-grip")
-        .w(8.0)
+        .w(12.0)
+        .h(20.0)
+        .center()
         .gap(2.0)
+        .cursor(rune::Cursor::Grab)
+        .help(if left { "Drag right to dock the pane on the right" } else { "Drag left to dock the pane on the left" })
+        .children((0..3).map(|_| el().w(10.0).h(2.0).fill(px::GRILLE_ON)).collect::<Vec<_>>())
+        .on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
+            if matches!(d.phase, Phase::Up) {
+                if left && d.dx > 160.0 {
+                    s.set_pane(Dock::Right);
+                } else if !left && d.dx < -160.0 {
+                    s.set_pane(Dock::Left);
+                }
+            }
+        });
+    // The pane's inner edge, full height: drag it to resize.
+    let resize = el()
+        .key("pane-resize")
+        .absolute(if left { w - 6.0 } else { 0.0 }, 0.0)
+        .w(6.0)
+        .h_full()
         .cursor(rune::Cursor::ResizeColumn)
+        .hover(px::GRILLE_ON)
         .help("Drag to resize the pane")
-        .children((0..3).map(|_| el().w(8.0).h(2.0).fill(px::GRILLE_ON)).collect::<Vec<_>>())
         .on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
             if matches!(d.phase, Phase::Down) {
                 d.data = s.sheet_w;
@@ -130,9 +151,19 @@ fn build(s: &App, t: &Tab, w: f32, k: &Kit) -> El {
         _ => el(),
     };
     let border = if left { [0.0, 1.0, 0.0, 0.0] } else { [0.0, 0.0, 0.0, 1.0] };
-    col().key("pane").w(w).h_full().min_h(0.0).fill(px::RAISED).border_sides(border, px::LINE).transition(rune::Transition::opacity()).child(head).child(
-        col().key("pane-scroll").w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(col().w_full().px(16.0).py(16.0).gap(12.0).child(body)),
-    )
+    col()
+        .key("pane")
+        .w(w)
+        .h_full()
+        .min_h(0.0)
+        .fill(px::RAISED)
+        .border_sides(border, px::LINE)
+        .transition(rune::Transition::opacity())
+        .child(head)
+        .child(
+            col().key("pane-scroll").w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(col().w_full().px(16.0).py(16.0).gap(12.0).child(body)),
+        )
+        .child(resize)
 }
 
 fn hint(msg: &str) -> El {

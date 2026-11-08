@@ -339,6 +339,8 @@ pub struct App {
     pub log_open: Option<crate::jobs::JobId>,
     /// A message along the bottom: (text, is_error).
     pub toast: Option<(String, bool)>,
+    /// The toast on screen and when it went up, to clear it after a few seconds.
+    toast_seen: Option<(String, std::time::Instant)>,
     pub mcp_status: String,
     /// The new-tab menu, and the runs it offers (listed when it opens).
     pub new_menu: bool,
@@ -407,6 +409,7 @@ impl App {
             activity_open: false,
             log_open: None,
             toast: cfg_error.map(|e| (e, true)),
+            toast_seen: None,
             new_menu: false,
             menu_runs: Vec::new(),
             sheet_w: 360.0,
@@ -1774,6 +1777,20 @@ impl App {
             && let Some(wait) = self.dock.show(self.mood())
         {
             tx.wake_after(wait);
+        }
+        if let Some((msg, err)) = &self.toast {
+            if self.toast_seen.as_ref().is_none_or(|(m, _)| m != msg) {
+                self.toast_seen = Some((msg.clone(), std::time::Instant::now()));
+            }
+            let life = std::time::Duration::from_secs(if *err { 8 } else { 4 });
+            let up = self.toast_seen.as_ref().map_or(life, |(_, at)| at.elapsed());
+            if up >= life {
+                self.toast = None;
+                self.toast_seen = None;
+                changed = true;
+            } else {
+                tx.wake_after(life - up);
+            }
         }
         if self.dirty {
             self.dirty = false;

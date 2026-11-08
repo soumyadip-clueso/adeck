@@ -428,7 +428,7 @@ pub fn annotation(tab: &Tab, k: &Kit) -> Option<El> {
             .key("annotation")
             .w_full()
             .px(12.0)
-            .py(if folded { 4.0 } else { 8.0 })
+            .py(if folded { 2.0 } else { 4.0 })
             .gap(10.0)
             .center_y()
             .radius(6.0)

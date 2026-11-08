@@ -17,9 +17,9 @@ pub mod single;
 pub mod statusbar;
 pub mod widgets;
 
-use rune::{Cx, El, KeyEvent, Tx, col, el, row, text};
+use rune::{Cx, El, KeyEvent, Tx, col, row, text};
 use rune_kit::shell::{TabItem, TabOrientation, TabStrip, WindowTitlebar};
-use rune_kit::{Kit, Toast, ToastRegion};
+use rune_kit::{Kit, Toast};
 
 use crate::app::{App, TabKind};
 
@@ -54,7 +54,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             } else {
                 page
             };
-            let page = col().key("page").grow(1.0).min_w(0.0).h_full().min_h(0.0).px(PAGE_X).pt(24.0).pb(16.0).child(page);
+            let page = col().key("page").grow(1.0).min_w(0.0).h_full().min_h(0.0).px(PAGE_X).pt(14.0).pb(14.0).child(page);
             pane::wrap(s, t, page, full_w, k)
         }
     };
@@ -72,8 +72,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         root = root.child(player::build(s, t, k));
     }
     if let Some((msg, err)) = &s.toast {
-        let t = Toast::new("toast", msg.clone()).icon(k, if *err { &icons::WARNING } else { &icons::CHECK }).closable().on_close(|s: &mut App| s.toast = None).build(k);
-        layer.push(el().absolute(0.0, 0.0).w_full().h_full().inert().child(ToastRegion::new().toast(t).build(k)));
+        // Above the player; click it or its × to dismiss (it also clears itself after a few seconds).
+        let t = Toast::new("toast", msg.clone())
+            .icon(k, if *err { &icons::WARNING } else { &icons::CHECK })
+            .on_close(|s: &mut App| s.toast = None)
+            .build(k)
+            .cursor(rune::Cursor::Pointer)
+            .on_press(|s: &mut App| s.toast = None);
+        layer.push(col().key("toast-region").pin(None, None, Some(20.0), Some(84.0)).child(t));
     }
     keys::build(s, full_w, k, &mut layer);
     palette::build(s, full_w, k, &mut layer);
@@ -120,14 +126,11 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         .on_reorder(|s: &mut App, r, _tx: &mut Tx| s.reorder(&r.id, r.to))
         .trailing_action(new_menu(s, k, layer))
         .build_layered(k, layer);
-    // The agent's connection only shows when it's down; ⌘K is the way in to everything else.
+    // The agent's connection only shows when it's down.
     let mut trailing = row().gap(14.0).center_y().pr(4.0);
     if s.calls.is_none() {
         trailing = trailing.child(px::lamp("MCP OFF", px::BAD).key("mcp-status").help(s.mcp_status.clone()));
     }
-    trailing = trailing.child(
-        text("⌘K").key("palette-hint").font(px::pixel(11.0)).color(px::OFF).cursor(rune::Cursor::Pointer).help("Every command · ⌘K").on_press(|s: &mut App| palette::open(s)),
-    );
     WindowTitlebar::from_insets(cx.chrome_insets(), 1.0).tabs(strip).trailing(trailing).build(k)
 }
 
