@@ -117,7 +117,7 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(el().size(7.0, 7.0).radius(4.0).fill(if s.calls.is_some() { k.c.success.icon } else { k.c.icon_faint }))
         .child(text(s.mcp_status.clone()).font(k.ty.small).color(k.c.text_muted))
         .help("Connect with: claude mcp add --transport http adeck http://127.0.0.1:<port>/mcp");
-    let trailing = row().gap(10.0).center_y().child(palette::pill(k)).child(mcp);
+    let trailing = row().gap(10.0).center_y().child(mcp);
     WindowTitlebar::from_insets(cx.chrome_insets(), 1.0).tabs(strip).trailing(trailing).build(k)
 }
 

@@ -348,29 +348,6 @@ pub(crate) fn hint(key: &str, what: &str, k: &Kit) -> El {
     row().gap(6.0).center_y().child(keycap(key, k)).child(text(what.to_owned()).font(k.ty.small).color(k.c.text_faint))
 }
 
-/// The titlebar's search pill: where ⌘K lives when you don't know it yet.
-pub fn pill(k: &Kit) -> El {
-    let c = &k.c;
-    row()
-        .key("pal-pill")
-        .w(260.0)
-        .h(28.0)
-        .gap(8.0)
-        .px(10.0)
-        .center_y()
-        .radius(8.0)
-        .fill(c.layer_02)
-        .border(1.0, c.border_weak)
-        .cursor(rune::Cursor::Pointer)
-        .role("button")
-        .label("Search or run a command")
-        .child(rune::icon(&icons::SEARCH, 14.0).color(c.icon_muted))
-        .child(text("Search or run a command").font(k.ty.small).color(c.text_faint))
-        .child(spacer())
-        .child(keycap("⌘K", k))
-        .on_press(open)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
