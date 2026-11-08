@@ -56,6 +56,18 @@ struct Shared {
 }
 
 /// What the UI holds.
+/// Where the playhead is between buffers: `ahead` seconds on from the last buffer's `at`
+/// (never more than 50 ms), wrapped inside a loop and stopped at a selection's or the file's
+/// end, so a short loop's playhead never draws past the loop and snaps back.
+fn guess(at: f64, ahead: f64, end: f64, looping: Option<(f64, f64)>, range: Option<(f64, f64)>) -> f64 {
+    let t = at + ahead.clamp(0.0, 0.05);
+    if let Some((a, b)) = looping.filter(|(a, b)| b > a && at >= *a && at <= *b) {
+        return if t >= b { a + (t - a) % (b - a) } else { t };
+    }
+    let stop = range.filter(|(a, b)| b > a && at <= *b).map_or(end, |(_, b)| b.min(end));
+    t.min(stop.max(at))
+}
+
 pub struct Mixer {
     tx: Option<Sender<Cmd>>,
     shared: Arc<Shared>,
@@ -309,8 +321,10 @@ impl Mixer {
         // Between buffers, carry on at real time, never past one buffer's worth.
         let since = self.shared.base.elapsed().as_nanos() as u64;
         let ahead = since.saturating_sub(self.shared.stamp.load(Ordering::Acquire)) as f64 / 1e9;
-        let end = self.frames.saturating_sub(1) as f64 / f64::from(self.rate);
-        (at + ahead.min(0.05)).min(end.max(at))
+        let rate = f64::from(self.rate);
+        let end = self.frames.saturating_sub(1) as f64 / rate;
+        let secs = |(a, b): (u64, u64)| (a as f64 / rate, b as f64 / rate);
+        guess(at, ahead, end, self.loop_frames.map(secs), self.range_frames.map(secs))
     }
 
     pub fn total_secs(&self) -> f64 {
@@ -612,6 +626,24 @@ pub fn trim_for(lufs: Option<f64>, target: f64) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_playhead_guess_stays_inside_a_loop_and_stops_at_a_selection() {
+        // A 40 ms loop: 30 ms ahead from 10 ms before its end wraps to 20 ms into it.
+        let g = guess(1.03, 0.03, 10.0, Some((1.0, 1.04)), None);
+        assert!((g - 1.02).abs() < 1e-9, "{g}");
+        // Never past the loop, wherever in it the last buffer ended (the callback has
+        // already wrapped what it reports).
+        for i in 0..40 {
+            let g = guess(1.0 + f64::from(i) * 0.001, 0.05, 10.0, Some((1.0, 1.04)), None);
+            assert!((1.0..1.04).contains(&g), "{g}");
+        }
+        // A selection's end holds the playhead; so does the file's.
+        assert_eq!(guess(1.99, 0.05, 10.0, None, Some((1.0, 2.0))), 2.0);
+        assert_eq!(guess(9.99, 0.05, 10.0, None, None), 10.0);
+        // Outside the loop (just seeked away) it runs on as normal.
+        assert!((guess(5.0, 0.02, 10.0, Some((1.0, 1.04)), None) - 5.02).abs() < 1e-9);
+    }
+
     use super::*;
 
     #[test]
