@@ -1759,6 +1759,17 @@ impl App {
         let (_, jobs_changed) = self.jobs.drain(clock);
         changed |= jobs_changed;
         changed |= self.mixer.tick();
+        if self.mixer.take_lost() {
+            // The output went away or changed: reload onto the new one, at the same spot.
+            let (at, was) = (self.mixer.secs(), self.mixer.is_playing() || self.mixer.wants_play());
+            self.mixer.unload();
+            self.sync_mixer();
+            self.mixer.seek_secs(at);
+            if was {
+                self.mixer.play();
+            }
+            changed = true;
+        }
         if let Some(rx) = self.calls.take() {
             while let Ok(call) = rx.try_recv() {
                 let result = self.call(&call.tool, &call.args);

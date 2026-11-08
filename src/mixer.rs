@@ -42,6 +42,8 @@ struct Shared {
     ended: AtomicBool,
     /// The loudest sample of the last buffer out, as f32 bits, for the level meter.
     level: AtomicU32,
+    /// Counts audio callbacks, so the UI can tell a stream that silently stopped running.
+    beat: AtomicU64,
 }
 
 /// What the UI holds.
@@ -69,13 +71,27 @@ pub struct Mixer {
     pub volume: f32,
     /// A seek asked for while the files were still decoding, in seconds, applied once they land.
     pending_seek: Option<f64>,
+    /// Set by the stream's thread when the output died or the default output changed; the
+    /// thread then drops the stream. Each stream has its own.
+    stream_dead: Option<Arc<AtomicBool>>,
+    /// The output was lost and the app should reload onto the new one.
+    lost: bool,
+    /// The last callback count seen and when it changed.
+    last_beat: (u64, std::time::Instant),
 }
 
 impl Default for Mixer {
     fn default() -> Self {
         Mixer {
             tx: None,
-            shared: Arc::new(Shared { pos: AtomicU64::new(0), playing: AtomicBool::new(false), set: AtomicU64::new(0), ended: AtomicBool::new(false), level: AtomicU32::new(0) }),
+            shared: Arc::new(Shared {
+                pos: AtomicU64::new(0),
+                playing: AtomicBool::new(false),
+                set: AtomicU64::new(0),
+                ended: AtomicBool::new(false),
+                level: AtomicU32::new(0),
+                beat: AtomicU64::new(0),
+            }),
             rate: 48_000,
             opening: None,
             queued: Vec::new(),
@@ -91,6 +107,9 @@ impl Default for Mixer {
             pending: None,
             volume: 1.0,
             pending_seek: None,
+            stream_dead: None,
+            lost: false,
+            last_beat: (0, std::time::Instant::now()),
         }
     }
 }
@@ -107,19 +126,31 @@ impl Mixer {
         let (otx, orx) = channel();
         let waker = self.waker.clone();
         let shared = self.shared.clone();
+        let dead = Arc::new(AtomicBool::new(false));
+        self.stream_dead = Some(dead.clone());
+        self.last_beat = (self.shared.beat.load(Ordering::Relaxed), std::time::Instant::now());
         std::thread::Builder::new()
             .name("adeck-audio".into())
             .spawn(move || {
-                // The stream isn't Send, so it lives on this thread for the life of the app.
-                match start_stream(shared) {
-                    Ok((stream, tx, rate)) => {
+                // The stream isn't Send, so it lives on this thread until its output goes away:
+                // the device errors, or the system's default output changes (headphones in or
+                // out). Then the thread drops it and the UI reopens on the new default.
+                match start_stream(shared, dead.clone()) {
+                    Ok((stream, tx, rate, id)) => {
                         let _ = otx.send(Ok((tx, rate)));
                         if let Some(w) = &waker {
                             w();
                         }
                         let _keep = stream;
-                        loop {
-                            std::thread::park();
+                        while !dead.load(Ordering::Acquire) {
+                            std::thread::park_timeout(std::time::Duration::from_millis(750));
+                            let now = cpal::default_host().default_output_device().and_then(|d| d.id().ok());
+                            if now.is_some() && now != id {
+                                dead.store(true, Ordering::Release);
+                            }
+                        }
+                        if let Some(w) = &waker {
+                            w();
                         }
                     }
                     Err(e) => {
@@ -334,6 +365,24 @@ impl Mixer {
             self.want_play = false;
             changed = true;
         }
+        // A stream that died, moved, or stopped calling back while playing: drop it.
+        if self.tx.is_some() {
+            let beat = self.shared.beat.load(Ordering::Relaxed);
+            if beat != self.last_beat.0 || !self.is_playing() {
+                self.last_beat = (beat, std::time::Instant::now());
+            }
+            let stalled = self.is_playing() && self.last_beat.1.elapsed() > std::time::Duration::from_millis(1200);
+            if stalled || self.stream_dead.as_ref().is_some_and(|d| d.load(Ordering::Acquire)) {
+                if let Some(d) = self.stream_dead.take() {
+                    d.store(true, Ordering::Release);
+                }
+                self.tx = None;
+                self.opening = None;
+                self.queued.clear();
+                self.lost = true;
+                changed = true;
+            }
+        }
         let _ = self.shared.set.load(Ordering::Relaxed);
         changed
     }
@@ -342,6 +391,15 @@ impl Mixer {
         self.volume = v.clamp(0.0, 1.5);
         let v = self.volume;
         self.send(Cmd::Volume(v));
+    }
+
+    /// True once after the output was lost; the app then reloads onto the new output.
+    pub fn take_lost(&mut self) -> bool {
+        std::mem::take(&mut self.lost)
+    }
+
+    pub fn wants_play(&self) -> bool {
+        self.want_play
     }
 
     /// Forgets what's loaded, so the next `load` reloads.
@@ -369,9 +427,10 @@ struct State {
     volume: f32,
 }
 
-fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32), String> {
+fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Stream, Sender<Cmd>, u32, Option<cpal::DeviceId>), String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or("no output device")?;
+    let id = device.id().ok();
     let config = device.default_output_config().map_err(|e| e.to_string())?;
     let rate = config.sample_rate();
     let channels = config.channels() as usize;
@@ -391,6 +450,7 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
     });
     let sh = shared.clone();
     let fill = move |out: &mut [f32]| {
+        sh.beat.fetch_add(1, Ordering::Relaxed);
         let Ok(mut s) = st.lock() else {
             out.fill(0.0);
             return;
@@ -471,7 +531,10 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
         sh.pos.store(s.pos, Ordering::Release);
         sh.level.store(loudest.to_bits(), Ordering::Release);
     };
-    let err = |e: cpal::Error| eprintln!("adeck: audio stream error: {e}");
+    let err = move |e: cpal::Error| {
+        eprintln!("adeck: audio stream error: {e}");
+        dead.store(true, Ordering::Release);
+    };
     let cfg: cpal::StreamConfig = config.into();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(cfg, move |out: &mut [f32], _| fill(out), err, None),
@@ -481,7 +544,7 @@ fn start_stream(shared: Arc<Shared>) -> Result<(cpal::Stream, Sender<Cmd>, u32),
     }
     .map_err(|e| e.to_string())?;
     stream.play().map_err(|e| e.to_string())?;
-    Ok((stream, tx, rate))
+    Ok((stream, tx, rate, id))
 }
 
 /// The linear trim that brings `lufs` to `target`, capped at +12 dB.
@@ -495,6 +558,31 @@ pub fn trim_for(lufs: Option<f64>, target: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stream_that_stops_calling_back_while_playing_is_dropped_and_reported() {
+        let mut m = Mixer::default();
+        let (tx, _rx) = channel();
+        m.tx = Some(tx);
+        m.frames = 48_000;
+        m.shared.playing.store(true, Ordering::Release);
+        m.last_beat = (0, std::time::Instant::now() - std::time::Duration::from_secs(2));
+        m.tick();
+        assert!(m.tx.is_none(), "the dead stream's sender is dropped");
+        assert!(m.take_lost(), "the app is told to reload");
+        assert!(!m.take_lost(), "once");
+    }
+
+    #[test]
+    fn a_stream_flagged_dead_is_dropped_even_when_paused() {
+        let mut m = Mixer::default();
+        let (tx, _rx) = channel();
+        m.tx = Some(tx);
+        let dead = Arc::new(AtomicBool::new(true));
+        m.stream_dead = Some(dead);
+        m.tick();
+        assert!(m.take_lost());
+    }
 
     #[test]
     fn trims_match_loudness_and_cap_boosts() {
