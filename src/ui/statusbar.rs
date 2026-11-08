@@ -60,6 +60,15 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .child(col().min_w(0.0).shrink().child(summary))
         .child(spacer())
         .child(chips)
+        .child(
+            IconButton::new(&icons::CAMERA)
+                .variant(IconButtonVariant::Ghost)
+                .label(if s.shooting { "Taking the screenshot…" } else { "Screenshot this tab, framed, to ~/Pictures/adeck and the clipboard · ⌘⇧S" })
+                .disabled(s.shooting || s.current().is_none())
+                .on_press(|s: &mut App| s.screenshot())
+                .build(k)
+                .key("screenshot"),
+        )
 }
 
 /// How a job looks right now: its leading mark, its line of text and that text's colour.

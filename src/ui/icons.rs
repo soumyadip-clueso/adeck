@@ -70,6 +70,18 @@ pub static SPEAKER: Icon = Icon {
     body: r#"<path d="M2.75 6.25H5L8.25 3.5V12.5L5 9.75H2.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M10.5 6C11.2 6.6 11.2 9.4 10.5 10M12.25 4.5C13.7 5.9 13.7 10.1 12.25 11.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
 };
 
+pub static CAMERA: Icon = Icon {
+    name: "adeck-camera",
+    view: 16.0,
+    body: r#"<path d="M2.5 5.25C2.5 4.7 2.95 4.25 3.5 4.25H5.25L6.25 2.75H9.75L10.75 4.25H12.5C13.05 4.25 13.5 4.7 13.5 5.25V11.75C13.5 12.3 13.05 12.75 12.5 12.75H3.5C2.95 12.75 2.5 12.3 2.5 11.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><circle cx="8" cy="8.5" r="2.25" stroke="currentColor" stroke-width="1.2" fill="none"/>"#,
+};
+
+pub static SHARE: Icon = Icon {
+    name: "adeck-share",
+    view: 16.0,
+    body: r#"<path d="M8 2.5V10M5.25 5L8 2.25L10.75 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M4.5 7.5H3.75C3.2 7.5 2.75 7.95 2.75 8.5V12.5C2.75 13.05 3.2 13.5 3.75 13.5H12.25C12.8 13.5 13.25 13.05 13.25 12.5V8.5C13.25 7.95 12.8 7.5 12.25 7.5H11.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
+};
+
 pub static MUTED: Icon = Icon {
     name: "adeck-muted",
     view: 16.0,

@@ -295,6 +295,7 @@ pub enum Event {
     Listed { tab: u64, result: Result<Vec<Item>, String> },
     Earshot { id: String, cmd: Earshot, result: Result<Value, String> },
     Sheet { id: String, result: Result<PathBuf, String> },
+    Shot { result: Result<PathBuf, String> },
 }
 
 pub struct App {
@@ -328,6 +329,9 @@ pub struct App {
     pub menu_runs: Vec<String>,
     /// The detail sheet's width, kept across tabs.
     pub sheet_w: f32,
+    /// The window's size and theme as last drawn, for screenshots.
+    pub win: std::cell::Cell<(f32, f32, bool)>,
+    pub shooting: bool,
     dirty: bool,
     pub headless: bool,
 }
@@ -371,6 +375,8 @@ impl App {
             new_menu: false,
             menu_runs: Vec::new(),
             sheet_w: 480.0,
+            win: std::cell::Cell::new((1280.0, 800.0, true)),
+            shooting: false,
             dirty: false,
             headless,
         };
@@ -1435,6 +1441,28 @@ impl App {
         }
     }
 
+    /// A framed 2x screenshot of the front tab, saved to ~/Pictures/adeck and copied.
+    pub fn screenshot(&mut self) {
+        let Some(t) = self.current() else { return };
+        if self.shooting {
+            return;
+        }
+        let (tab, label) = (t.id(), crate::ui::tab_title(self, t));
+        let (w, h, dark) = self.win.get();
+        self.save();
+        self.shooting = true;
+        let (tx, waker) = (self.tx.clone(), self.waker.clone());
+        std::thread::spawn(move || {
+            let result = crate::shot::render(tab, &format!("{}x{}", w.round(), h.round()), if dark { "dark" } else { "light" }, 2)
+                .and_then(|png| crate::shot::frame(&png, dark, 2))
+                .and_then(|png| crate::shot::keep(&png, &label));
+            let _ = tx.send(Event::Shot { result });
+            if let Some(w) = waker {
+                w();
+            }
+        });
+    }
+
     pub fn set_volume(&mut self, v: f32) {
         self.mixer.set_volume(v);
     }
@@ -1588,6 +1616,13 @@ impl App {
                     }
                     Err(e) => self.toast = Some((e, true)),
                 }
+            }
+            Event::Shot { result } => {
+                self.shooting = false;
+                self.toast = Some(match result {
+                    Ok(p) => (format!("Screenshot copied · saved to {}", p.display().to_string().replace(&std::env::var("HOME").unwrap_or_default(), "~")), false),
+                    Err(e) => (e, true),
+                });
             }
             Event::Sheet { id, result } => {
                 let Some(entry) = self.items.get_mut(&id) else {

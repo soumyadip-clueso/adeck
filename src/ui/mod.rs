@@ -51,7 +51,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         _ => body,
     };
     let footer_w = cx.layout_size("statusbar").map_or(1280.0, |z| z[0]);
-    let mut root = col().w_full().h_full().fill(c.page).child(titlebar).child(col().key("body").w_full().grow(1.0).min_h(0.0).px(PAD).pt(10.0).pb(10.0).child(body));
+    if let Some([w, h]) = cx.layout_size("root") {
+        s.win.set((w, h, cx.system_dark()));
+    }
+    let mut root = col().key("root").w_full().h_full().fill(c.page).child(titlebar).child(col().key("body").w_full().grow(1.0).min_h(0.0).px(PAD).pt(10.0).pb(10.0).child(body));
     if let Some(a) = statusbar::activity(s, k) {
         root = root.child(a);
     }
@@ -247,6 +250,10 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let plain = !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl;
     if ev.is_command('t') {
         s.open_new_menu();
+        return true;
+    }
+    if ev.is_command('s') && ev.mods.shift {
+        s.screenshot();
         return true;
     }
     if ev.is_command('o') {

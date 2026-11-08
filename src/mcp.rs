@@ -203,24 +203,13 @@ fn screenshot(args: &Value, ctx: &Ctx) -> Result<Vec<u8>, String> {
     let saved = ctx.ui("_save", json!({}))?;
     let tab = args.get("tab_id").and_then(Value::as_u64).or_else(|| saved["active"].as_u64()).ok_or("No tab is open.")?;
     let size = args.get("size").and_then(Value::as_str).unwrap_or("1280x800").to_owned();
-    let out = std::env::temp_dir().join(format!("adeck-shot-{}-{tab}.png", std::process::id()));
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let theme = args.get("theme").and_then(Value::as_str).unwrap_or("dark");
-    let status = std::process::Command::new(exe)
-        .args(["--snap", &out.display().to_string(), "--size", &size, "--scale", "1", "--theme", theme])
-        .env("ADECK_FOCUS", tab.to_string())
-        .env("ADECK_HEADLESS", "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("Couldn't start the headless render: {e}"))?;
-    if !status.status.success() {
-        let err = String::from_utf8_lossy(&status.stderr);
-        return Err(format!("The headless render failed: {}", err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output")));
+    if args.get("pretty").and_then(Value::as_bool).unwrap_or(false) {
+        let png = crate::shot::frame(&crate::shot::render(tab, &size, theme, 2)?, theme == "dark", 2)?;
+        crate::shot::keep(&png, &format!("tab {tab}"))?;
+        return Ok(png);
     }
-    let png = std::fs::read(&out).map_err(|e| format!("No screenshot was written: {e}"))?;
-    let _ = std::fs::remove_file(&out);
-    Ok(png)
+    crate::shot::render(tab, &size, theme, 1)
 }
 
 fn analyze(args: &Value, ctx: &Ctx) -> Result<Value, String> {
@@ -394,7 +383,7 @@ pub fn tools() -> Vec<Value> {
         tool(
             "screenshot_tab",
             "A PNG of a tab as the user sees it.",
-            json!({"tab_id": tab, "size": {"type": "string", "description": "WxH in points, default 1280x800."}, "theme": {"type": "string", "enum": ["dark", "light"]}}),
+            json!({"tab_id": tab, "size": {"type": "string", "description": "WxH in points, default 1280x800."}, "theme": {"type": "string", "enum": ["dark", "light"]}, "pretty": {"type": "boolean", "description": "Framed at 2x on a backdrop for sharing; also saved to ~/Pictures/adeck and copied."}}),
             &[],
         ),
         tool(
