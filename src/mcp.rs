@@ -335,7 +335,18 @@ pub fn tools() -> Vec<Value> {
                 "choices": {"type": "array", "items": {"type": "string"}, "description": "Decisions offered on each file, e.g. [\"keep\", \"drop\"]. Read them back with get_decisions."},
                 "move_to": {"type": "array", "items": {"type": "string"}, "description": "Groups a file can be moved to; recorded as move:<group>."},
                 "blind": {"type": "boolean", "description": "Hide which member is which (X/Y/Z, shuffled) in each group until the user picks."},
+                "layout": {"type": "string", "enum": ["board", "pads"], "description": "pads: big play buttons for one-shot effects, strips only on request."},
                 "loudness_match": {"type": "boolean", "description": "Default true."}
+            }),
+            &[],
+        ),
+        tool(
+            "open_pads",
+            "Open sound pads for one-shot effects: each file is a big button that plays it from the top on a click or its key (1-9, 0, then Q-P, A-L), with 0-3 score dots and keep/drop. No strips unless the user asks for them. Give items (one row of pads) or groups (a row per category, same shape as open_board). board_upsert adds more.",
+            json!({
+                "label": {"type": "string"}, "note": note, "items": items, "groups": board_groups(), "metrics": metrics(),
+                "choices": {"type": "array", "items": {"type": "string"}}, "move_to": {"type": "array", "items": {"type": "string"}},
+                "blind": {"type": "boolean"}, "loudness_match": {"type": "boolean"}
             }),
             &[],
         ),

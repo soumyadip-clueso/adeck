@@ -107,6 +107,8 @@ pub struct Tab {
     /// Board tabs: strips show just the sound, not the silence around it.
     pub zoom_sound: bool,
     pub move_open: bool,
+    /// Pads: show the focused group's waveform, spectrogram and target bars.
+    pub pads_detail: bool,
     /// The stretch of time the strips show, when zoomed in; `None` fits the whole file.
     pub view: Option<(f64, f64)>,
     /// Strip height, as a multiple of each strip's own.
@@ -138,6 +140,7 @@ impl Tab {
             details_open: false,
             zoom_sound: true,
             move_open: false,
+            pads_detail: false,
             view: None,
             strip_h: 1.0,
             note_open: spec_kind == TabKind::Run,
@@ -965,6 +968,50 @@ impl App {
         self.mixer.play();
     }
 
+    /// A pad: plays this member from the very top, whatever was playing.
+    pub fn pad_play(&mut self, key: &str, idx: usize) {
+        self.focus_group(key);
+        let Some(t) = self.current() else { return };
+        if idx >= t.spec.items.len() {
+            return;
+        }
+        self.set_active_member(idx);
+        self.set_loop(None);
+        self.seek_secs(0.0);
+        self.sync_mixer();
+        self.mixer.play();
+    }
+
+    /// Space on pads: stop, or play the last pad from the top again.
+    pub fn pad_replay(&mut self) {
+        if self.mixer.is_playing() {
+            self.mixer.pause();
+        } else {
+            self.seek_secs(0.0);
+            self.sync_mixer();
+            self.mixer.play();
+        }
+    }
+
+    /// Scores one file (0-3) without it having to be the one you're hearing.
+    pub fn score_item(&mut self, id: &str, value: i64) {
+        let Some(t) = self.current() else { return };
+        let row = Row { ts: feedback::now(), tab_id: t.id(), kind: "score".into(), items: vec![id.to_owned()], value: Value::from(value), note: t.note.text.trim().to_owned(), blind: t.spec.blind, reveal_map: None };
+        if self.write(row) {
+            self.scores.insert(id.to_owned(), value);
+            if let Some(t) = self.current_mut() {
+                t.note = TextEdit::new("");
+            }
+        }
+    }
+
+    /// Scores the pad you played last.
+    pub fn score_active(&mut self, value: i64) {
+        if let Some(id) = self.current().and_then(|t| t.spec.items.get(t.active).cloned()) {
+            self.score_item(&id, value);
+        }
+    }
+
     /// Where playback starts over: the start of the sound when zoomed to it, else the start.
     pub fn view_start(&self) -> f64 {
         self.view_range().map_or(0.0, |(a, _)| a)
@@ -1018,7 +1065,11 @@ impl App {
         let at = order.iter().position(|&m| m == t.active).unwrap_or(0) as i64;
         let next = order[(at + by).rem_euclid(order.len() as i64) as usize];
         let key = g.key.clone();
-        self.board_play(&key, next);
+        if t.board().is_some_and(Board::is_pads) {
+            self.pad_play(&key, next);
+        } else {
+            self.board_play(&key, next);
+        }
     }
 
     /// Loops what the strip shows (the sound, or the whole file), or stops looping.
@@ -1669,11 +1720,32 @@ impl App {
                     let b: Board = serde_json::from_value(json!({
                         "groups": a.get("groups").cloned().unwrap_or(json!([])), "metrics": a.get("metrics").cloned().unwrap_or(json!([])),
                         "choices": a.get("choices").cloned().unwrap_or(json!([])), "move_to": a.get("move_to").cloned().unwrap_or(json!([])),
+                        "layout": a.get("layout").cloned().unwrap_or(Value::Null),
                     }))
                     .map_err(|e| format!("Couldn't read the board: {e}"))?;
                     (Some(b), None)
                 };
                 let id = self.open_page(s("label"), b, d, blind, lm);
+                if let Some(n) = s("note") {
+                    self.annotate(id, n);
+                }
+                Ok(self.tab_json(id))
+            }
+            "open_pads" => {
+                let items = ids("items");
+                let groups = match a.get("groups") {
+                    Some(g) => g.clone(),
+                    None if !items.is_empty() => json!([{ "key": "pads", "title": s("label").unwrap_or_else(|| "Pads".into()), "members": items.iter().map(|i| json!({ "item": i })).collect::<Vec<_>>() }]),
+                    None => return Err("open_pads needs items or groups.".into()),
+                };
+                let b: Board = serde_json::from_value(json!({
+                    "groups": groups, "metrics": a.get("metrics").cloned().unwrap_or(json!([])),
+                    "choices": a.get("choices").cloned().unwrap_or(json!([])), "move_to": a.get("move_to").cloned().unwrap_or(json!([])), "layout": "pads",
+                }))
+                .map_err(|e| format!("Couldn't read the pads: {e}"))?;
+                let blind = a.get("blind").and_then(Value::as_bool).unwrap_or(false);
+                let lm = a.get("loudness_match").and_then(Value::as_bool).unwrap_or(true);
+                let id = self.open_page(s("label").or_else(|| Some("Pads".into())), Some(b), None, blind, lm);
                 if let Some(n) = s("note") {
                     self.annotate(id, n);
                 }

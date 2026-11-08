@@ -8,7 +8,7 @@ use crate::app::{App, TabKind};
 
 type Scene = (&'static str, fn(&mut App));
 
-pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff)];
+pub const ALL: &[Scene] = &[("empty", empty), ("single", single), ("compare", compare), ("blind", blind), ("run", run), ("board", board), ("board-blind", board_blind), ("diff", diff), ("pads", pads)];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -163,6 +163,14 @@ fn board_blind(s: &mut App) {
     let mut a = board_args();
     a["blind"] = serde_json::Value::Bool(true);
     let _ = s.call("open_board", &a);
+    s.settle_now();
+}
+
+fn pads(s: &mut App) {
+    reset(s);
+    let mut a = board_args();
+    a["label"] = serde_json::json!("UI sounds");
+    let _ = s.call("open_pads", &a);
     s.settle_now();
 }
 
@@ -430,6 +438,30 @@ mod tests {
         rt.invalidate();
         rt.frame(1.0 / 60.0);
         assert!(rt.find("annotation").is_none());
+    }
+
+    #[test]
+    fn pads_play_from_the_top_on_their_key_and_score_on_the_pad() {
+        let mut rt = rt(pads);
+        let t = rt.state.current().unwrap();
+        assert!(t.board().unwrap().is_pads());
+        for key in ["pad-whoosh-soft-0", "pad-whoosh-soft-3", "pad-ui-click-0", "pad-score-whoosh-soft-0-2"] {
+            assert!(rt.find(key).is_some(), "{key}");
+        }
+        assert!(rt.find("bwave").is_none(), "no strips until asked");
+        assert!(crate::ui::pads::on_key(&mut rt.state, '2'));
+        assert_eq!(rt.state.current().unwrap().active, 1);
+        assert!(crate::ui::pads::on_key(&mut rt.state, 'c'));
+        let id = rt.state.current().unwrap().spec.items[1].clone();
+        assert_eq!(rt.state.scores.get(&id), Some(&2));
+        // A flat list of files makes one row of pads.
+        let files = ids(&["tick", "tone-a"]);
+        let v = rt.state.call("open_pads", &serde_json::json!({"items": files, "label": "Clicks"})).unwrap();
+        assert_eq!(v["board"]["groups"], 1);
+        rt.state.current_mut().unwrap().pads_detail = true;
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("pad-pads-1").is_some() && rt.find("bwave").is_some());
     }
 
     #[test]

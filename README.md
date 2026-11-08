@@ -13,6 +13,7 @@ Forked from [Sleeve](https://github.com/alii/sleeve), a rekordbox app by Alistai
 - **A render**: the video, earshot's scorecard and fixes, and every picture cut marked by whether it got a hit, some sound, or silence. Several renders switch like a compare.
 - **A run**: every item as a sortable table. Filter by any text, show what you haven't scored, open one or compare a selection.
 - **A board**: one card per group (a category, say), sorted by whatever the agent says matters (search count, say), each a row of tiles: the picks, the raw "before", the reference files, with the agent's numbers and a verdict chip, and a tally on top. Click a tile to play it; only one plays, and switching inside a group keeps the position, loudness-matched. The group in focus opens up: waveform and spectrogram zoomed to the sound (a 60 ms click fills the strip), bands, stereo width, tail and attack against the group's target, what made the file (prompt, model, seed, chain, a copyable path), keep / drop / move-to, and the ranked rest of the takes, folded. Blind hides who's who in each group as X, Y, Z until you pick. The agent adds or replaces groups while it's open.
+- **Pads**: for one-shot effects. Each file is a big button: click it, or press its key (1 to 0, then Q to P), and it plays from the top, cutting off whatever was playing, with a bar filling as it plays. Score it 0 to 3 on the pad (or Z X C V for the one you just played), keep or drop it. The Waveforms switch opens the strips and target bars only when you want them. The agent opens pads with `open_pads` (a list of files, or groups) or a board with `layout: "pads"`.
 - **A diff**: run A against run B, one row per group, one column per metric, the change coloured by which way is better, with how many got better and worse. A row that names a file from each side opens them as a compare.
 
 Press or drag on a waveform to scrub; drag along the time ruler above it to loop a stretch (click the ruler to clear it). − and + zoom the time axis around the playhead (= and − on the keyboard, F fits the file or the loop, [ and ] pan), and a zoomed view follows the playhead as it plays. Drag the handle under the strips to make them taller. The transport has a scrubber over the whole file, the output level and a volume. Space plays, ← and → step a second (with ⇧, five), Esc clears the loop, ⌘W closes the tab. Tabs come back when you reopen adeck.
@@ -63,6 +64,7 @@ Or in a project's `.mcp.json`:
 | `get_feedback`, `wait_for_feedback` | Your verdicts |
 | `analyze` | Run earshot `describe`, `measure`, `critique` or `timeline` (cached) |
 | `open_board`, `board_upsert` | A board of groups; add or replace groups (or a diff's rows) while it's open |
+| `open_pads` | Sound pads for one-shot effects |
 | `open_diff` | Run A against run B, per group and metric |
 | `get_decisions` | Your latest keep / drop / move on each file of a board |
 | `get_selection` | What you pointed the agent at, newest first |

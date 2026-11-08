@@ -119,6 +119,15 @@ pub struct Board {
     /// Groups a file can be moved to, recorded as `move:<group>`.
     #[serde(default)]
     pub move_to: Vec<String>,
+    /// "pads": each file is a button that plays it from the top, for one-shot effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
+}
+
+impl Board {
+    pub fn is_pads(&self) -> bool {
+        self.layout.as_deref() == Some("pads")
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

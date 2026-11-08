@@ -323,7 +323,7 @@ fn bar(key: &str, frac: f32, w: Option<f32>, fill: Color, k: &Kit, on: impl Fn(&
 }
 
 /// The output level, a meter that falls back smoothly.
-fn meter(s: &App, k: &Kit) -> El {
+pub fn meter(s: &App, k: &Kit) -> El {
     let db = s.mixer.level_db();
     let f = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
     let color = if db > -1.0 {
@@ -342,6 +342,17 @@ fn meter(s: &App, k: &Kit) -> El {
         .clip_rounded(3.0)
         .help(if db <= -89.0 { "Level".to_owned() } else { format!("Level {db:.0} dBFS") })
         .child(el().w_frac(f).h_full().fill(color).motion(rune::Spring::SMOOTH))
+}
+
+/// The volume control: an icon and a bar.
+pub fn volume(s: &App, k: &Kit) -> El {
+    let vol = s.mixer.volume;
+    row()
+        .gap(4.0)
+        .center_y()
+        .help(format!("Volume {}", if vol <= 0.001 { "muted".into() } else { format!("{:+.1} dB", 20.0 * vol.log10()) }))
+        .child(rune::icon(if vol <= 0.001 { &icons::MUTED } else { &icons::SPEAKER }, 14.0).color(k.c.text_muted))
+        .child(bar("volume", vol / 1.5, Some(70.0), k.c.text_muted, k, |s: &mut App, f, _| s.set_volume(f * 1.5)))
 }
 
 /// The transport every audio tab shares: play, time, a scrubber over the whole file (with the

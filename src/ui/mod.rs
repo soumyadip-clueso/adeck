@@ -3,6 +3,7 @@
 pub mod board;
 pub mod compare;
 pub mod diff;
+pub mod pads;
 pub mod icons;
 pub mod render;
 pub mod run;
@@ -35,6 +36,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             TabKind::Compare => compare::build(s, t, width, k),
             TabKind::Render => render::build(s, t, width, k),
             TabKind::Run => run::build(s, t, k),
+            TabKind::Board if t.board().is_some_and(crate::board::Board::is_pads) => pads::build(s, t, width, k),
             TabKind::Board => board::build(s, t, width, k),
             TabKind::Diff => diff::build(s, t, width, k),
         },
@@ -256,6 +258,16 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let Some(kind) = s.current().map(|t| t.spec.kind) else { return false };
     if matches!(kind, TabKind::Run | TabKind::Diff) {
         return false;
+    }
+    if kind == TabKind::Board && s.current().and_then(|t| t.board()).is_some_and(crate::board::Board::is_pads) && !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl {
+        match &ev.key {
+            rune::Key::Text(ch) if ch == " " => {
+                s.pad_replay();
+                return true;
+            }
+            rune::Key::Text(ch) if ch.chars().count() == 1 && pads::on_key(s, ch.chars().next().unwrap_or(' ')) => return true,
+            _ => {}
+        }
     }
     if kind == TabKind::Board && board_key(s, ev) {
         return true;

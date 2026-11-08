@@ -69,7 +69,7 @@ pub fn chip(ch: &Chip, k: &Kit) -> El {
     row().px(7.0).py(2.0).radius(4.0).fill(fill).child(text(ch.text.clone()).font(k.ty.small_medium).color(ink).truncate())
 }
 
-fn role_color(role: &str, k: &Kit) -> Color {
+pub fn role_color(role: &str, k: &Kit) -> Color {
     match role {
         "pick" => k.c.icon_accent,
         "before" => k.c.warning.fg,
@@ -196,7 +196,7 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
 }
 
 /// "vibe 1.05 · shape 0.51", labelled by the board's metrics where it has them.
-fn numbers_line(n: &Map<String, Value>, _s: &App, t: &Tab, _g: &Group) -> String {
+pub fn numbers_line(n: &Map<String, Value>, _s: &App, t: &Tab, _g: &Group) -> String {
     let metrics = t.board().map(|b| b.metrics.as_slice()).unwrap_or_default();
     n.iter()
         .map(|(key, v)| {
@@ -229,7 +229,7 @@ fn view_of(t: &Tab, e: &Entry) -> Option<(f64, f64)> {
 }
 
 /// The focused group opened up.
-fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
+pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     let c = &k.c;
     let all = g.playable();
     let Some(mem) = all.get(t.active).copied() else { return col() };
