@@ -17,9 +17,8 @@ const GAP: f32 = 10.0;
 const BANDS: [&str; 5] = ["sub", "low", "lowmid", "mid", "presence"];
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
-    let c = &k.c;
     let Some(b) = t.board() else {
-        return text("This board is empty.").font(k.ty.small).color(c.text_muted);
+        return text("This board is empty.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT);
     };
     let blind = px::toggle("Blind", t.spec.blind).key("blind").help("Hide which is which in each group until you pick · B").on_press(|s: &mut App| s.toggle_blind());
     let lm = px::toggle("Match loudness", t.spec.loudness_match).key("match").help("Trim every take to the same LUFS · M").on_press(|s: &mut App| s.toggle_loudness_match());
@@ -37,7 +36,7 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         page = page.child(a);
     }
     if let Some(err) = &t.error {
-        page = page.child(text(err.clone()).font(k.ty.small).color(c.danger.fg).wrap());
+        page = page.child(text(err.clone()).font(rune::TextStyle::new(13.0, 400.0)).color(px::BAD).wrap());
     }
     let focused = t.focused().map(|g| g.key.clone());
     let inner = width - 14.0;
@@ -48,10 +47,10 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
         list = list.child(group_card(s, t, g, on, inner, k));
     }
     if shown.is_empty() && !b.groups.is_empty() {
-        list = list.child(text(format!("No group or sound matches “{}”.", t.filter.text.trim())).font(k.ty.small).color(c.text_muted).py(20.0));
+        list = list.child(text(format!("No group or sound matches “{}”.", t.filter.text.trim())).font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).py(20.0));
     }
     if b.groups.is_empty() {
-        list = list.child(text("Nothing on this board yet. The agent adds groups as results land.").font(k.ty.small).color(c.text_muted).py(20.0));
+        list = list.child(text("Nothing on this board yet. The agent adds groups as results land.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).py(20.0));
     }
     page.child(col().key("groups-scroll").w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
 }
@@ -257,7 +256,6 @@ fn view_of(t: &Tab, e: &Entry) -> Option<(f64, f64)> {
 
 /// The focused group opened up.
 pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
-    let c = &k.c;
     let all = g.playable();
     let Some(mem) = all.get(t.active).copied() else { return col() };
     let hidden = t.active < g.members.len() && t.group_hidden(&g.key);
@@ -305,7 +303,11 @@ pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
     // Analysis beside details when there's room, else stacked.
     let wide = width >= 760.0;
     let half = if wide { (width - 16.0) / 2.0 } else { width };
-    let left = if hidden { col().w(half).child(text("Blind: the numbers show after you pick.").font(k.ty.small).color(c.text_muted)) } else { analysis(s, g, mem, e, half, k) };
+    let left = if hidden {
+        col().w(half).child(text("Blind: the numbers show after you pick.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT))
+    } else {
+        analysis(s, g, mem, e, half, k)
+    };
     let right = if hidden { col().w(half) } else { details(s, t, mem, e, half, k) };
     d = d.child(if wide { row().w_full().gap(16.0).child(left).child(right) } else { col().w_full().gap(12.0).child(left).child(right) });
 
@@ -512,7 +514,6 @@ fn decisions(s: &App, t: &Tab, mem: &Member, _k: &Kit) -> Option<El> {
 
 /// The ranked rest, folded.
 fn more(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
-    let c = &k.c;
     let open = t.more_open.contains(&g.key);
     let key = g.key.clone();
     let toggle = px::key(if open { format!("HIDE THE OTHER {} ▾", g.more.len()) } else { format!("THE OTHER {} RANKED ▸", g.more.len()) }, false)
@@ -549,7 +550,7 @@ fn more(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
                         .truncate(),
                 )
                 .child(text(nums.to_uppercase()).font(px::pixel(10.0)).color(px::SILK).truncate().grow(1.0).min_w(0.0))
-                .child(text(s.decisions.get(&m.item).cloned().unwrap_or_default()).font(k.ty.small).color(c.text_muted))
+                .child(text(s.decisions.get(&m.item).cloned().unwrap_or_default().to_uppercase()).font(px::pixel(10.0)).color(px::SILK))
                 .on_press(move |s: &mut App| s.board_play(&key, idx)),
         );
     }

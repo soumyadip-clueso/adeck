@@ -75,6 +75,20 @@ pub fn key(label_text: impl Into<String>, on: bool) -> El {
         .child(text(label_text.into()).font(pixel(13.0)).color(if on { CASE } else { SOFT }))
 }
 
+/// A small key for tight rows (the status bar, job rows).
+pub fn key_sm(label_text: impl Into<String>, on: bool) -> El {
+    row()
+        .h(22.0)
+        .min_w(22.0)
+        .px(7.0)
+        .center()
+        .radius(3.0)
+        .fill(if on { LED } else { Color::TRANSPARENT })
+        .border(1.0, if on { LED } else { GRILLE })
+        .cursor(rune::Cursor::Pointer)
+        .child(text(label_text.into().to_uppercase()).font(pixel(10.0)).color(if on { CASE } else { SOFT }))
+}
+
 /// A latching switch: a square LED and a label.
 pub fn toggle(label_text: &str, on: bool) -> El {
     row()

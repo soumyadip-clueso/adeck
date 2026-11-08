@@ -232,38 +232,27 @@ pub fn pick_folder(tx: &mut Tx) {
 }
 
 /// A dashed target for dropped files, with the same choices as the "+" menu.
-pub fn drop_zone(msg: &str, k: &Kit) -> El {
-    let c = &k.c;
+pub fn drop_zone(msg: &str, _k: &Kit) -> El {
     col()
         .key("drop-zone")
         .w_full()
         .grow(1.0)
         .min_h(160.0)
         .center()
-        .gap(10.0)
-        .radius(k.radius.lg)
-        .border(1.5, c.border_strong)
-        .fill(c.layer_01)
+        .gap(14.0)
+        .radius(8.0)
+        .border(1.0, px::GRILLE)
+        .fill(px::SCREEN)
         .transition(rune::Transition::opacity())
-        .child(rune::icon(&icons::DROP, 26.0).color(c.icon_faint))
-        .child(text(msg.to_owned()).font(k.ty.ui_medium).color(c.text_base))
+        .child(rune::icon(&icons::DROP, 24.0).color(px::FAINT))
+        .child(text(msg.to_uppercase()).font(px::pixel(16.0)).color(px::LED))
         .child(
             row()
                 .gap(8.0)
                 .child(
-                    rune_kit::Button::new("Open file…")
-                        .variant(rune_kit::ButtonVariant::Outline)
-                        .on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare)))
-                        .build(k)
-                        .key("dz-file"),
+                    px::key("OPEN FILE…", true).key("dz-file").on_press_tx(|s: &mut App, tx: &mut Tx| pick_files(tx, s.current().is_some_and(|t| t.spec.kind == TabKind::Compare))),
                 )
-                .child(
-                    rune_kit::Button::new("Open folder…")
-                        .variant(rune_kit::ButtonVariant::Outline)
-                        .on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx))
-                        .build(k)
-                        .key("dz-folder"),
-                ),
+                .child(px::key("OPEN FOLDER…", false).key("dz-folder").on_press_tx(|_s: &mut App, tx: &mut Tx| pick_folder(tx))),
         )
 }
 

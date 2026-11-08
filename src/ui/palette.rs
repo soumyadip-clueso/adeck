@@ -5,6 +5,7 @@ use rune::{Color, El, Icon, Key, TextEdit, Tx, col, el, row, spacer, text};
 use rune_kit::{Kit, TextInput};
 
 use crate::app::{App, TabKind};
+use crate::ui::px;
 use crate::ui::{icons, pick_files, pick_folder};
 
 /// The palette while it's open.
@@ -233,7 +234,6 @@ const ROW: f32 = 40.0;
 
 pub fn build(s: &App, width: f32, k: &Kit, layer: &mut Vec<El>) {
     let Some(p) = &s.palette else { return };
-    let c = &k.c;
     let q = p.query.text.clone();
     let hits = results(s, &q);
     let active = p.active.min(hits.len().saturating_sub(1));
@@ -281,44 +281,43 @@ pub fn build(s: &App, width: f32, k: &Kit, layer: &mut Vec<El>) {
     for (i, h) in hits.iter().enumerate() {
         if h.section != section {
             section = h.section;
-            list = list.child(text(section).font(k.ty.small_medium).color(c.text_faint).px(10.0).pt(if i == 0 { 2.0 } else { 10.0 }).pb(4.0));
+            list = list.child(text(section.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).px(10.0).pt(if i == 0 { 2.0 } else { 10.0 }).pb(4.0));
         }
         list = list.child(hit_row(h, i, i == active, k));
     }
     if hits.is_empty() {
-        list = list.child(text(format!("Nothing matches “{q}”")).font(k.ty.ui).color(c.text_muted).px(12.0).py(18.0));
+        list = list.child(text(format!("Nothing matches “{q}”")).font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).px(12.0).py(18.0));
     }
     let foot = row()
         .w_full()
         .gap(14.0)
         .px(14.0)
         .py(8.0)
-        .border_sides([1.0, 0.0, 0.0, 0.0], c.border_weak)
+        .border_sides([1.0, 0.0, 0.0, 0.0], px::LINE)
         .child(hint("↑↓", "move", k))
         .child(hint("↵", "run", k))
         .child(hint("esc", "close", k))
         .child(spacer())
-        .child(text(format!("{} result{}", hits.len(), if hits.len() == 1 { "" } else { "s" })).font(k.ty.small).color(c.text_faint));
+        .child(text(format!("{} RESULT{}", hits.len(), if hits.len() == 1 { "" } else { "S" })).font(px::pixel(10.0)).color(px::FAINT));
     let panel_w = (width - 32.0).min(640.0);
     let panel = col()
         .key("palette")
         .w(panel_w)
-        .radius(14.0)
-        .fill(c.layer_01)
-        .border(1.0, c.border_strong)
-        .shadow(18.0, 48.0, Color::BLACK.alpha(0.45))
-        .clip_rounded(14.0)
+        .radius(10.0)
+        .fill(px::RAISED)
+        .border(1.0, px::GRILLE_ON)
+        .shadow(18.0, 48.0, Color::BLACK.alpha(0.6))
+        .clip_rounded(10.0)
         .transition(rune::Transition::offset(0.0, -10.0).combined(rune::Transition::opacity()).combined(rune::Transition::scale(0.98)))
-        .child(row().w_full().px(12.0).py(6.0).border_sides([0.0, 0.0, 1.0, 0.0], c.border_weak).child(field))
+        .child(row().w_full().px(12.0).py(6.0).border_sides([0.0, 0.0, 1.0, 0.0], px::LINE).child(field))
         .child(col().w_full().max_h(420.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
         .child(foot);
     let panel = panel.modal(true, |s: &mut App| s.palette = None);
-    layer.push(col().key("pal-scrim").absolute(0.0, 0.0).w_full().h_full().fill(Color::BLACK.alpha(0.4)).transition(rune::Transition::opacity()).a11y_hidden());
+    layer.push(col().key("pal-scrim").absolute(0.0, 0.0).w_full().h_full().fill(Color::BLACK.alpha(0.6)).transition(rune::Transition::opacity()).a11y_hidden());
     layer.push(col().key("pal-layer").absolute(0.0, 0.0).w_full().h_full().child(el().h(90.0)).child(row().w_full().child(spacer()).child(panel).child(spacer())));
 }
 
 fn hit_row(h: &Hit, i: usize, on: bool, k: &Kit) -> El {
-    let c = &k.c;
     let act = h.act.clone();
     let mut r = row()
         .key(format!("pal-{i}"))
@@ -327,20 +326,21 @@ fn hit_row(h: &Hit, i: usize, on: bool, k: &Kit) -> El {
         .gap(10.0)
         .px(10.0)
         .center_y()
-        .radius(8.0)
-        .fill(if on { c.text_base.alpha(0.16) } else { Color::TRANSPARENT })
+        .radius(4.0)
+        .fill(if on { px::SELECTED } else { Color::TRANSPARENT })
+        .border(1.0, if on { px::GRILLE_ON } else { Color::TRANSPARENT })
         .cursor(rune::Cursor::Pointer)
         .role("option")
         .label(h.title.clone())
-        .child(rune::icon(h.icon, 16.0).color(if on { c.text_base } else { c.icon_muted }))
+        .child(rune::icon(h.icon, 16.0).color(if on { px::LED } else { px::SILK }))
         .child(
             row()
                 .gap(8.0)
                 .min_w(0.0)
                 .shrink()
                 .center_y()
-                .child(text(h.title.clone()).font(k.ty.ui).color(c.text_base).truncate())
-                .child(text(h.detail.clone()).font(k.ty.small).color(c.text_faint).truncate()),
+                .child(text(h.title.clone()).font(rune::TextStyle::new(14.0, 500.0)).color(if on { px::LED } else { px::SOFT }).truncate())
+                .child(text(h.detail.clone()).font(rune::TextStyle::new(12.0, 400.0)).color(px::FAINT).truncate()),
         )
         .child(spacer());
     if !h.keys.is_empty() {
@@ -354,12 +354,12 @@ fn hit_row(h: &Hit, i: usize, on: bool, k: &Kit) -> El {
 }
 
 pub(crate) fn keycap(t: &str, k: &Kit) -> El {
-    let c = &k.c;
-    row().px(5.0).h(20.0).min_w(20.0).center().radius(5.0).border(1.0, c.border_weak).fill(c.layer_02).child(text(t.to_owned()).font(k.ty.small_medium).color(c.text_muted))
+    let _ = k;
+    row().px(5.0).h(20.0).min_w(20.0).center().radius(3.0).border(1.0, px::GRILLE_ON).child(text(t.to_uppercase()).font(px::pixel(11.0)).color(px::SOFT))
 }
 
 pub(crate) fn hint(key: &str, what: &str, k: &Kit) -> El {
-    row().gap(6.0).center_y().child(keycap(key, k)).child(text(what.to_owned()).font(k.ty.small).color(k.c.text_faint))
+    row().gap(6.0).center_y().child(keycap(key, k)).child(text(what.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT))
 }
 
 #[cfg(test)]

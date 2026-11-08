@@ -27,7 +27,7 @@ snap SCENE OUT="target/snaps":
 
 # Every scene, into target/snaps/.
 snaps:
-    for s in empty single compare blind run board pads palette; do just snap $s; done
+    for s in empty single compare blind run board pads diff shared activity palette keys; do just snap $s; done
 
 # Move rune to the tip of its default branch (or a given commit), then lint, test and snap: just bump-rune [sha]
 bump-rune *SHA:

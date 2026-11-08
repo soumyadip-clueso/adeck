@@ -1,8 +1,8 @@
 //! The pieces every tab is built from: the waveform and spectrogram strips with their playhead,
 //! beat grid and loop, the transport, score buttons, and key/value tables.
 
-use rune::{Color, Drag, El, Phase, Tx, col, el, oklch, row, spacer, text};
-use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit};
+use rune::{Color, Drag, El, Phase, Tx, col, el, row, spacer, text};
+use rune_kit::{IconButton, IconButtonVariant, Kit};
 
 use crate::app::{App, Entry, Tab};
 use crate::ui::{icons, px};
@@ -225,13 +225,13 @@ fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32,
 }
 
 /// The loop region and the playhead over a strip.
-fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, (lo, hi): (f64, f64), k: &Kit) -> El {
+fn overlays(mut strip: El, s: &App, tab: &Tab, width: f32, height: f32, (lo, hi): (f64, f64), _k: &Kit) -> El {
     let span = (hi - lo).max(1e-6);
     let x_of = |secs: f64| ((secs - lo) / span) as f32 * width;
     if let Some((a, b)) = tab.loop_secs {
         let (xa, xb) = (x_of(a).clamp(0.0, width), x_of(b).clamp(0.0, width));
         if xb > xa {
-            strip = strip.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(k.c.text_base.alpha(0.16)).border(1.0, k.c.text_base.alpha(0.6)).inert());
+            strip = strip.child(el().absolute(xa, 0.0).w((xb - xa).max(1.0)).h(height).fill(px::AMBER.alpha(0.10)).border(1.0, px::AMBER.alpha(0.55)).inert());
         }
     }
     let ph = playhead(s, tab);
@@ -255,8 +255,8 @@ fn scrub_handler(strip: El, lo: f64, hi: f64) -> El {
         .on_double_press_tx(|s: &mut App, tx: &mut Tx| s.send_to_agent(None, tx))
 }
 
-fn loading(why: &str, k: &Kit) -> El {
-    row().w_full().h_full().center().gap(8.0).inert().child(text(why.to_owned()).font(k.ty.small).color(Color::WHITE.alpha(0.55)).truncate())
+fn loading(why: &str, _k: &Kit) -> El {
+    row().w_full().h_full().center().gap(8.0).inert().child(text(why.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).truncate())
 }
 
 /// `child` placed `f` of the way across its parent, on a layer that ignores the pointer.
@@ -312,7 +312,7 @@ pub fn ruler(s: &App, tab: &Tab, key: &str, k: &Kit) -> El {
     if let Some((a, b)) = tab.loop_secs {
         let (fa, fb) = (((a - lo) / span).clamp(0.0, 1.0) as f32, ((b - lo) / span).clamp(0.0, 1.0) as f32);
         if fb > fa {
-            r = r.child(at_frac(fa, el().w_frac(fb - fa).h(20.0).radius(3.0).fill(c.text_base.alpha(0.22)).border(1.0, c.text_base.alpha(0.7))));
+            r = r.child(at_frac(fa, el().w_frac(fb - fa).h(20.0).radius(3.0).fill(px::AMBER.alpha(0.18)).border(1.0, px::AMBER.alpha(0.7))));
         }
     }
     r.on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
@@ -382,24 +382,17 @@ pub fn readouts(e: Option<&Entry>, trim_db: Option<f64>) -> El {
 }
 
 /// The REF badge for the local-only reference pack.
-pub fn ref_badge(k: &Kit) -> El {
-    row()
-        .px(5.0)
-        .py(1.0)
-        .radius(4.0)
-        .fill(oklch(0.75, 0.15, 75.0))
-        .child(text("REF").font(rune::TextStyle { size: 10.0, ..k.ty.small_medium }).color(oklch(0.2, 0.02, 0.0)))
-        .help("From the local-only reference pack. Never published.")
+pub fn ref_badge(_k: &Kit) -> El {
+    row().px(5.0).py(1.0).radius(2.0).border(1.0, px::SILK).child(text("REF").font(px::pixel(10.0)).color(px::SOFT)).help("From the local-only reference pack. Never published.")
 }
 
 /// The agent's pinned note: fold it to one line, or dismiss it.
 pub fn annotation(tab: &Tab, k: &Kit) -> Option<El> {
     let md = tab.spec.note.as_ref()?;
-    let c = &k.c;
     let folded = tab.annotation_folded;
     let first = md.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim_start_matches(['#', ' ', '>', '-']).replace("**", "");
     let body = if folded {
-        text(first).font(k.ty.small).color(c.text_base).truncate().grow(1.0).min_w(0.0)
+        text(first).font(rune::TextStyle::new(13.0, 400.0)).color(px::SOFT).truncate().grow(1.0).min_w(0.0)
     } else {
         col().grow(1.0).min_w(0.0).child(rune_kit::Markdown::new(md.clone()).build(k))
     };
@@ -443,10 +436,9 @@ pub fn annotation(tab: &Tab, k: &Kit) -> Option<El> {
 }
 
 /// earshot's results for a file and buttons to run what hasn't run.
-pub fn earshot_panel(s: &App, e: &Entry, k: &Kit) -> El {
-    let c = &k.c;
+pub fn earshot_panel(s: &App, e: &Entry, _k: &Kit) -> El {
     let mut panel = col().key("earshot").w_full().gap(8.0);
-    let mut buttons = row().gap(6.0).child(text("earshot").font(k.ty.small_medium).color(c.text_muted)).child(spacer());
+    let mut buttons = row().gap(6.0).center_y().child(px::label("earshot")).child(spacer());
     for cmd in [crate::derive::Earshot::Describe, crate::derive::Earshot::Measure] {
         let name = cmd.name();
         let busy = e.earshot_busy.contains(name);
@@ -455,39 +447,45 @@ pub fn earshot_panel(s: &App, e: &Entry, k: &Kit) -> El {
             continue;
         }
         let id = e.item.id.clone();
-        buttons = buttons.child(
-            Button::new(if busy { format!("{name}…") } else { name.to_owned() })
-                .variant(ButtonVariant::Outline)
-                .control_size(ControlSize::Small)
-                .disabled(busy)
-                .on_press(move |s: &mut App| s.run_earshot(&id, cmd))
-                .build(k)
-                .key(format!("earshot-{name}")),
-        );
+        let mut b = px::key_sm(if busy { format!("{name}…") } else { format!("Run {name}") }, false).key(format!("earshot-{name}"));
+        if !busy {
+            b = b.on_press(move |s: &mut App| s.run_earshot(&id, cmd));
+        }
+        buttons = buttons.child(b);
     }
     panel = panel.child(buttons);
     let _ = s;
     if e.earshot.is_empty() {
-        panel = panel.child(text("Tags, labels and measurements from earshot show here once you run it.").font(k.ty.small).color(c.text_faint).wrap());
+        panel = panel.child(text("Tags, labels and measurements from earshot show here once you run it.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).wrap());
     }
     if let Some(v) = e.earshot.get("describe") {
         let rows = crate::item::flatten(&crate::app::summarise_earshot(crate::derive::Earshot::Describe, v));
         panel = panel.child(col().w_full().gap(2.0).children(rows.into_iter().take(14).map(|(kk, vv)| {
-            row().gap(8.0).child(text(kk).font(k.ty.small).color(c.text_faint).w(140.0).truncate()).child(text(vv).font(k.ty.small).color(c.text_base).wrap().grow(1.0).min_w(0.0))
+            row()
+                .w_full()
+                .py(5.0)
+                .gap(8.0)
+                .border_sides([0.0, 0.0, 1.0, 0.0], px::SELECTED)
+                .child(text(kk.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).w(120.0).pt(2.0).truncate())
+                .child(text(vv).font(rune::TextStyle::new(12.0, 400.0).mono()).color(px::SOFT).wrap().grow(1.0).min_w(0.0))
         })));
     }
     if let Some(v) = e.earshot.get("measure") {
         let rows = crate::item::flatten(v);
         panel = panel.child(col().w_full().gap(2.0).children(rows.into_iter().filter(|(kk, _)| !kk.contains("path")).take(16).map(|(kk, vv)| {
             row()
+                .w_full()
+                .py(5.0)
                 .gap(8.0)
-                .child(text(kk).font(k.ty.small).color(c.text_faint).w(140.0).truncate())
-                .child(text(vv).font(k.ty.small.features("'tnum' 1")).color(c.text_base).truncate().grow(1.0).min_w(0.0))
+                .border_sides([0.0, 0.0, 1.0, 0.0], px::SELECTED)
+                .child(text(kk.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).w(120.0).pt(2.0).truncate())
+                .child(text(vv).font(px::pixel(11.0)).color(px::SOFT).truncate().grow(1.0).min_w(0.0))
         })));
     }
     panel
 }
 
 pub fn section_title(t: &str, k: &Kit) -> El {
-    text(t.to_owned()).font(k.ty.small_medium).color(k.c.text_muted)
+    let _ = k;
+    px::label(t)
 }

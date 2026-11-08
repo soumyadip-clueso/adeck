@@ -2426,34 +2426,6 @@ impl App {
             "diff": t.spec.diff.as_ref().map(|d| json!({ "a": d.a, "b": d.b, "rows": d.rows.len() })),
         })
     }
-
-    /// The status bar's left side.
-    pub fn summary(&self) -> String {
-        match self.current() {
-            None => "No tabs. Ask your LLM to open something, or drop files here.".into(),
-            Some(t) if t.spec.kind == TabKind::Run => format!("{} items", t.rows.len()),
-            Some(t) if t.spec.kind == TabKind::Shared => "Shared pages · take one down to delete its page and audio".into(),
-            Some(t) if t.spec.kind == TabKind::Diff => t.spec.diff.as_ref().map_or_else(String::new, |d| format!("{} vs {} · {} rows", d.a, d.b, d.rows.len())),
-            Some(t) if t.spec.kind == TabKind::Board => {
-                let b = t.board().cloned().unwrap_or_default();
-                let all = b.items();
-                let ready = all.iter().filter(|i| self.items.get(*i).is_some_and(|e| e.analysis.is_some())).count();
-                let decided = all.iter().filter(|i| self.decisions.contains_key(*i)).count();
-                let mut s = format!("{} groups · {} files", b.groups.len(), all.len());
-                if ready < all.len() {
-                    s += &format!(" · analysing {ready}/{}", all.len());
-                }
-                if decided > 0 {
-                    s += &format!(" · {decided} decided");
-                }
-                s
-            }
-            Some(t) => {
-                let ready = t.spec.items.iter().filter(|i| self.items.get(*i).is_some_and(|e| e.analysis.is_some())).count();
-                if ready < t.spec.items.len() { format!("Analysing {}/{}…", ready, t.spec.items.len()) } else { format!("{} file{}", ready, if ready == 1 { "" } else { "s" }) }
-            }
-        }
-    }
 }
 
 /// The read-only tools: they touch the disk, the bucket and the cache but nothing on screen, so

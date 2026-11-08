@@ -10,7 +10,7 @@ use rune_kit::{ControlSize, IconButton, IconButtonVariant, Kit, Spinner};
 
 use crate::app::App;
 use crate::jobs::{Job, Level, Outcome, Phase};
-use crate::ui::icons;
+use crate::ui::{icons, px};
 /// The footer's side padding.
 pub const INSET: f32 = 16.0;
 
@@ -23,9 +23,6 @@ const SUMMARY_W: f32 = 150.0;
 const MORE_W: f32 = 76.0;
 
 pub fn build(s: &App, width: f32, k: &Kit) -> El {
-    let c = &k.c;
-    let summary = text(s.summary()).key("status-summary").font(k.ty.small).color(c.text_muted).truncate();
-
     let jobs = s.jobs.list();
     let free = width - 2.0 * INSET - SUMMARY_W;
     let fits = |n: usize| n as f32 * (CHIP_W + 6.0) <= free;
@@ -33,22 +30,14 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
     let hidden = jobs.len() - shown;
     let mut chips = row().key("status-jobs").gap(6.0).center_y();
     if hidden > 0 {
-        let label = format!("+{hidden} more");
-        chips = chips.child(
-            rune_kit::Button::new(label)
-                .variant(rune_kit::ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .expanded(s.activity_open)
-                .on_press(|s: &mut App| s.activity_open ^= true)
-                .build(k)
-                .key("status-more"),
-        );
+        chips = chips.child(px::key_sm(format!("+{hidden} more"), s.activity_open).key("status-more").on_press(|s: &mut App| s.activity_open ^= true));
     }
     // The newest jobs stay in the footer; older ones fold away first.
     for job in &jobs[hidden..] {
         chips = chips.child(chip(job, k));
     }
-
+    let running = jobs.iter().filter(|j| j.is_active()).count();
+    let lead = if running > 0 { px::lamp(&format!("{running} working"), px::AMBER) } else { px::lamp("Done", px::SILK) };
     row()
         .key("statusbar")
         .w_full()
@@ -56,43 +45,21 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .px(INSET)
         .gap(12.0)
         .center_y()
-        .border_sides([1.0, 0.0, 0.0, 0.0], c.border_muted)
-        .child(col().min_w(0.0).shrink().child(summary))
+        .fill(px::CASE)
+        .border_sides([1.0, 0.0, 0.0, 0.0], px::LINE)
+        .child(lead.key("status-summary").cursor(rune::Cursor::Pointer).help("Every job · click for Activity").on_press(|s: &mut App| s.activity_open ^= true))
         .child(spacer())
         .child(chips)
-        .child(
-            IconButton::new(&icons::SHARE)
-                .variant(IconButtonVariant::Ghost)
-                .label(if s.sharing { "Sharing…" } else { "Share this tab as a web page · ⌘⇧E" })
-                .disabled(s.sharing || !s.can_share())
-                .on_press(|s: &mut App| {
-                    if let Err(e) = s.share() {
-                        s.toast = Some((e, true));
-                    }
-                })
-                .build(k)
-                .key("share"),
-        )
-        .child(
-            IconButton::new(&icons::CAMERA)
-                .variant(IconButtonVariant::Ghost)
-                .label(if s.shooting { "Taking the screenshot…" } else { "Screenshot this tab, framed, to ~/Pictures/adeck and the clipboard · ⌘⇧S" })
-                .disabled(s.shooting || s.current().is_none())
-                .on_press(|s: &mut App| s.screenshot())
-                .build(k)
-                .key("screenshot"),
-        )
 }
 
 /// How a job looks right now: its leading mark, its line of text and that text's colour.
 fn face(job: &Job, k: &Kit) -> (El, String, rune::Color) {
-    let c = &k.c;
     match &job.phase {
-        Phase::Running => (Spinner::new().size(12.0).build(k), job.title.clone(), c.text_base),
-        Phase::Stopping => (Spinner::new().size(12.0).color(c.icon_faint).build(k), format!("Stopping {}…", job.kind.noun()), c.text_muted),
-        Phase::Done { outcome: Outcome::Completed(m), .. } => (glyph(&icons::CHECK, c.success.icon), m.clone(), c.text_base),
-        Phase::Done { outcome: Outcome::Stopped(m), .. } => (glyph(&icons::STOP, c.icon_muted), m.clone(), c.text_muted),
-        Phase::Done { outcome: Outcome::Failed(m), .. } => (glyph(&icons::WARNING, c.danger.icon), m.clone(), c.danger.fg),
+        Phase::Running => (Spinner::new().size(12.0).color(px::AMBER).build(k), job.title.clone(), px::SOFT),
+        Phase::Stopping => (Spinner::new().size(12.0).color(px::FAINT).build(k), format!("Stopping {}…", job.kind.noun()), px::SILK),
+        Phase::Done { outcome: Outcome::Completed(m), .. } => (glyph(&icons::CHECK, px::GOOD), m.clone(), px::SOFT),
+        Phase::Done { outcome: Outcome::Stopped(m), .. } => (glyph(&icons::STOP, px::FAINT), m.clone(), px::SILK),
+        Phase::Done { outcome: Outcome::Failed(m), .. } => (glyph(&icons::WARNING, px::BAD), m.clone(), px::BAD),
     }
 }
 
@@ -119,7 +86,6 @@ fn action(job: &Job, k: &Kit) -> El {
 }
 
 fn chip(job: &Job, k: &Kit) -> El {
-    let c = &k.c;
     let id = job.id;
     let (lead, title, ink) = face(job, k);
     let mut body = row()
@@ -128,16 +94,16 @@ fn chip(job: &Job, k: &Kit) -> El {
         .gap(8.0)
         .center_y()
         .child(lead.key(id.key("lead")))
-        .child(text(title).key(id.key("title")).font(k.ty.small_medium).color(ink).truncate().shrink());
+        .child(text(title).key(id.key("title")).font(rune::TextStyle::new(12.0, 500.0)).color(ink).truncate().shrink());
     if job.is_active() {
         body = body.child(bar(job, 40.0, k));
         if let Some(f) = job.fraction() {
-            body = body.child(text(format!("{:.0}%", f * 100.0)).key(id.key("pct")).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).w(30.0).align(rune::Align::End));
+            body = body.child(text(format!("{:.0}%", f * 100.0)).key(id.key("pct")).font(px::pixel(10.0)).color(px::SILK).w(30.0).align(rune::Align::End));
         }
     }
     let fill = match &job.phase {
-        Phase::Done { outcome: Outcome::Failed(_), .. } => c.danger.bg,
-        Phase::Running | Phase::Stopping | Phase::Done { outcome: Outcome::Completed(_) | Outcome::Stopped(_), .. } => c.layer_01,
+        Phase::Done { outcome: Outcome::Failed(_), .. } => px::BAD.alpha(0.12),
+        Phase::Running | Phase::Stopping | Phase::Done { outcome: Outcome::Completed(_) | Outcome::Stopped(_), .. } => px::SCREEN,
     };
     let help = if job.detail.is_empty() { chip_label(job) } else { format!("{} · {}", chip_label(job), job.detail) };
     let chip = row()
@@ -150,9 +116,9 @@ fn chip(job: &Job, k: &Kit) -> El {
         .pr(2.0)
         .gap(4.0)
         .center_y()
-        .radius(k.radius.md)
+        .radius(4.0)
         .fill(fill)
-        .border(1.0, c.border_muted)
+        .border(1.0, px::LINE)
         .transition(Transition::offset(0.0, 6.0))
         .child(body.help(help).on_press(move |s: &mut App| s.open_job(id)).cursor(rune::Cursor::Pointer))
         .child(action(job, k).key(id.key("action")));
@@ -165,7 +131,6 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
     if !s.activity_open || s.jobs.list().is_empty() {
         return None;
     }
-    let c = &k.c;
     let rows = s.jobs.list().iter().rev().map(|job| {
         let id = job.id;
         let open = s.log_open == Some(id);
@@ -182,31 +147,17 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
                 .min_w(0.0)
                 .shrink()
                 .gap(1.0)
-                .child(text(title).font(k.ty.small_medium).color(ink).truncate())
-                .child(text(detail).key(id.key("detail")).font(k.ty.small.features("'tnum' 1")).color(c.text_faint).truncate()),
+                .child(text(title).font(rune::TextStyle::new(13.0, 500.0)).color(ink).truncate())
+                .child(text(detail.to_uppercase()).key(id.key("detail")).font(px::pixel(10.0)).color(px::FAINT).truncate()),
         );
         r = r.child(spacer());
         if job.is_active() {
             r = r.child(bar(job, 140.0, k));
-            r = r.child(
-                text(job.fraction().map_or_else(String::new, |f| format!("{:.0}%", f * 100.0)))
-                    .font(k.ty.small.features("'tnum' 1"))
-                    .color(c.text_muted)
-                    .w(34.0)
-                    .align(rune::Align::End),
-            );
+            r = r.child(text(job.fraction().map_or_else(String::new, |f| format!("{:.0}%", f * 100.0))).font(px::pixel(10.0)).color(px::SILK).w(34.0).align(rune::Align::End));
         }
         let warnings = job.log.iter().filter(|l| l.level != Level::Info).count();
         let label = if warnings > 0 { format!("Log · {warnings}") } else { "Log".to_owned() };
-        r = r.child(
-            rune_kit::Button::new(label)
-                .variant(rune_kit::ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .expanded(open)
-                .on_press(move |s: &mut App| s.log_open = if s.log_open == Some(id) { None } else { Some(id) })
-                .build(k)
-                .key(id.key("log-toggle")),
-        );
+        r = r.child(px::key_sm(label, open).key(id.key("log-toggle")).on_press(move |s: &mut App| s.log_open = if s.log_open == Some(id) { None } else { Some(id) }));
         let r = r.child(action(job, k).key(id.key("activity-action")));
         let mut block = col().key(id.key("activity-block")).w_full().child(r);
         if open {
@@ -219,30 +170,18 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
         .h(32.0)
         .px(INSET)
         .center_y()
-        .child(text("Activity").font(k.ty.small_medium).color(c.text_muted))
+        .gap(6.0)
+        .child(text("ACTIVITY").font(px::pixel(12.0)).color(px::LED))
         .child(spacer())
-        .child(
-            rune_kit::Button::new("Clear finished")
-                .variant(rune_kit::ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .disabled(!s.jobs.any_finished())
-                .on_press(|s: &mut App| s.jobs.clear_finished())
-                .build(k)
-                .key("activity-clear"),
-        )
-        .child(
-            rune_kit::Button::new("Open log file")
-                .variant(rune_kit::ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .help("Opens every job's log in Console")
-                .on_press(|_: &mut App| {
-                    if let Some(p) = crate::jobs::log_path() {
-                        let _ = std::process::Command::new("open").arg("-a").arg("Console").arg(p).spawn();
-                    }
-                })
-                .build(k)
-                .key("activity-logfile"),
-        )
+        .child({
+            let clear = px::key_sm("Clear finished", false).key("activity-clear");
+            if s.jobs.any_finished() { clear.on_press(|s: &mut App| s.jobs.clear_finished()) } else { clear.opacity(0.4) }
+        })
+        .child(px::key_sm("Open log file", false).key("activity-logfile").help("Opens every job's log in Console").on_press(|_: &mut App| {
+            if let Some(p) = crate::jobs::log_path() {
+                let _ = std::process::Command::new("open").arg("-a").arg("Console").arg(p).spawn();
+            }
+        }))
         .child(
             IconButton::new(&icons::CLOSE)
                 .variant(IconButtonVariant::GhostMuted)
@@ -258,11 +197,11 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
             .w_full()
             // A sheet pulled up over the list: a firm top edge, a raised surface, and a shadow
             // cast up onto the rows so it never reads as more of them.
-            .border_sides([1.0, 0.0, 0.0, 0.0], c.border_base)
-            .fill(c.layer_01)
+            .border_sides([1.0, 0.0, 0.0, 0.0], px::GRILLE)
+            .fill(px::RAISED)
             .shadow(-6.0, 18.0, rune::Color::BLACK.alpha(if k.dark { 0.45 } else { 0.12 }))
             .transition(Transition::offset(0.0, 12.0))
-            .child(header.border_sides([0.0, 0.0, 1.0, 0.0], c.border_muted))
+            .child(header.border_sides([0.0, 0.0, 1.0, 0.0], px::LINE))
             .child(col().key("activity-rows").w_full().max_h(360.0).scroll(rune::ScrollSpec { stick_bottom: false }).children(rows)),
     )
 }
@@ -278,51 +217,44 @@ fn elapsed(job: &Job) -> String {
 
 /// One job's log: every line with its time and level, newest at the bottom, and a copy button.
 fn log(job: &Job, k: &Kit) -> El {
-    let c = &k.c;
     let id = job.id;
     let mono = rune::TextStyle { size: 11.0, ..k.ty.mono };
     let lines = job.log.iter().map(|l| {
         let (tag, ink) = match l.level {
-            Level::Info => ("     ", c.text_muted),
-            Level::Warn => ("warn ", c.warning.fg),
-            Level::Error => ("error", c.danger.fg),
+            Level::Info => ("     ", px::SILK),
+            Level::Warn => ("warn ", px::CLOSE),
+            Level::Error => ("error", px::BAD),
         };
         row()
             .w_full()
             .gap(8.0)
-            .child(text(l.clock.clone()).font(mono).color(c.text_faint))
+            .child(text(l.clock.clone()).font(mono).color(px::FAINT))
             .child(text(tag).font(mono).color(ink))
-            .child(text(l.text.clone()).font(mono).color(if l.level == Level::Info { c.text_base } else { ink }).wrap().selectable(true).grow(1.0).min_w(0.0))
+            .child(text(l.text.clone()).font(mono).color(if l.level == Level::Info { px::SOFT } else { ink }).wrap().selectable(true).grow(1.0).min_w(0.0))
     });
     let body = col().key(id.key("log-lines")).w_full().max_h(220.0).py(8.0).px(10.0).gap(3.0).scroll(rune::ScrollSpec { stick_bottom: true }).children(lines);
-    let copy = rune_kit::Button::new("Copy log")
-        .variant(rune_kit::ButtonVariant::Ghost)
-        .control_size(ControlSize::Small)
-        .on_press_tx(move |s: &mut App, tx| {
-            if let Some(j) = s.jobs.get(id) {
-                tx.copy(j.log_text());
-            }
-        })
-        .build(k)
-        .key(id.key("log-copy"));
+    let copy = px::key_sm("Copy log", false).key(id.key("log-copy")).on_press_tx(move |s: &mut App, tx: &mut rune::Tx| {
+        if let Some(j) = s.jobs.get(id) {
+            tx.copy(j.log_text());
+        }
+    });
     col()
         .key(id.key("log"))
         .w_full()
         .px(INSET)
         .pb(10.0)
-        .child(col().w_full().radius(k.radius.md).fill(c.layer_01).border(1.0, c.border_muted).child(body).child(row().w_full().px(4.0).pb(4.0).child(spacer()).child(copy)))
+        .child(col().w_full().radius(4.0).fill(px::SCREEN).border(1.0, px::LINE).child(body).child(row().w_full().px(4.0).pb(4.0).child(spacer()).child(copy)))
 }
 
 /// A thin progress bar. Indeterminate while the job is still counting its work.
-fn bar(job: &Job, w: f32, k: &Kit) -> El {
-    let c = &k.c;
-    let ink = if job.phase == Phase::Stopping { c.icon_faint } else { c.text_base };
+fn bar(job: &Job, w: f32, _k: &Kit) -> El {
+    let ink = if job.phase == Phase::Stopping { px::FAINT } else { px::AMBER };
     let fill = el().h_full().radius(2.0).fill(ink);
     let fill = match job.fraction() {
         Some(f) => fill.w_frac(f),
         None => fill.w_frac(0.3).looping(rune::LoopSpec::slide(1.4, [-1.0, 0.0], [3.4, 0.0])),
     };
-    row().w(w).h(4.0).radius(2.0).fill(c.layer_03).clip_soft(0.0).child(fill)
+    row().w(w).h(4.0).radius(1.0).fill(px::GRILLE).clip_soft(0.0).child(fill)
 }
 
 fn glyph(i: &'static Icon, ink: rune::Color) -> El {

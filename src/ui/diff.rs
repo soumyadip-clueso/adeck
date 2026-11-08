@@ -2,90 +2,97 @@
 //! coloured by whether it got better, with how many got better and worse on top. Rows that
 //! name an item from each side open as a compare.
 
-use rune::{Color, El, col, row, spacer, text};
+use rune::{El, col, row, text};
 use rune_kit::Kit;
 
 use crate::app::{App, Tab, TabKind};
 use crate::board::{self, Diff, Metric};
-use crate::ui::widgets;
+use crate::ui::{px, widgets};
 
 const NAME_W: f32 = 170.0;
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
-    let c = &k.c;
     let Some(d) = &t.spec.diff else {
-        return text("This diff is empty.").font(k.ty.small).color(c.text_muted);
+        return text("This diff is empty.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT);
     };
     let narrow = width < 640.0;
     let name_w = if narrow { 110.0 } else { NAME_W };
     let cell_w = ((width - name_w - 20.0) / d.metrics.len().max(1) as f32).max(60.0);
-    let mut page = col().key("diff").w_full().h_full().min_h(0.0).gap(10.0);
-    page = page.child(
+    let side = |l: &str, name: &str, on: bool| {
         row()
-            .w_full()
-            .gap(10.0)
+            .gap(8.0)
+            .center_y()
+            .child(text(l.to_owned()).font(px::pixel(13.0)).color(px::CASE).px(5.0).py(1.0).fill(if on { px::LED } else { px::SILK }).radius(2.0))
+            .child(text(name.to_owned()).font(rune::TextStyle::new(13.0, 400.0).mono()).color(if on { px::LED } else { px::SILK }))
+    };
+    let title = col().gap(8.0).min_w(0.0).shrink().child(px::title(t.spec.label.clone().unwrap_or_else(|| format!("{} vs {}", d.a, d.b)))).child(
+        row()
+            .gap(14.0)
             .center_y()
             .flex_wrap()
-            .child(text(format!("A  {}", d.a)).font(k.ty.ui_medium).color(c.text_muted))
-            .child(text("→").font(k.ty.ui_medium).color(c.text_faint))
-            .child(text(format!("B  {}", d.b)).font(k.ty.ui_medium).color(c.text_base))
-            .child(spacer())
-            .child(text(format!("{} rows", d.rows.len())).font(k.ty.small).color(c.text_muted)),
+            .child(side("A", &d.a, false))
+            .child(text("→").font(px::pixel(13.0)).color(px::OFF))
+            .child(side("B", &d.b, true))
+            .child(px::lamp(&format!("{} rows", d.rows.len()), px::SILK)),
     );
+    let mut page = col().key("diff").w_full().h_full().min_h(0.0).gap(14.0).child(row().key("diff-head").w_full().child(title));
     if let Some(a) = widgets::annotation(t, k) {
         page = page.child(a);
     }
     // The tally: per metric, how many got better and worse, and the mean change.
-    let mut tally = row().key("diff-tally").w_full().gap(0.0).child(text("Overall").font(k.ty.small_medium).color(c.text_muted).w(name_w));
+    let mut tally = row()
+        .key("diff-tally")
+        .w_full()
+        .px(4.0)
+        .py(12.0)
+        .radius(6.0)
+        .fill(px::SCREEN)
+        .border(1.0, px::LINE)
+        .child(text("OVERALL").font(px::pixel(11.0)).color(px::FAINT).w(name_w - 4.0).pl(8.0));
     for (m, (up, down, mean)) in d.metrics.iter().zip(d.tally()) {
-        let mut cell = col().w(cell_w).gap(1.0).child(text(m.label().to_owned()).font(k.ty.small_medium).color(c.text_base).truncate());
+        let mut cell = col().w(cell_w).gap(4.0).child(text(m.label().to_uppercase()).font(px::pixel(11.0)).color(px::SOFT).truncate());
         if m.better.is_some() {
-            cell = cell.child(
-                text(format!("{up} better · {down} worse"))
-                    .font(k.ty.small.features("'tnum' 1"))
-                    .color(if up > down {
-                        c.success.fg
-                    } else if down > up {
-                        c.danger.fg
-                    } else {
-                        c.text_muted
-                    })
-                    .truncate(),
-            );
+            let ink = if up > down {
+                px::GOOD
+            } else if down > up {
+                px::BAD
+            } else {
+                px::SILK
+            };
+            cell = cell.child(text(format!("{up}↑ {down}↓")).font(px::pixel(20.0)).color(ink));
         }
         if let Some(x) = mean {
-            cell = cell.child(text(format!("mean {}", signed(x))).font(k.ty.small.features("'tnum' 1")).color(c.text_muted).truncate());
+            cell = cell.child(text(format!("MEAN {}", signed(x))).font(px::pixel(10.0)).color(px::FAINT).truncate());
         }
         if let Some(h) = &m.help {
             cell = cell.help(h.clone());
         }
         tally = tally.child(cell);
     }
-    page = page.child(tally.pb(6.0));
+    page = page.child(tally);
     let mut list = col().key("diff-rows").w_full();
-    for (i, r) in d.sorted().into_iter().enumerate() {
+    for r in d.sorted() {
         let mut line = row()
             .key(format!("drow-{}", r.key))
             .w_full()
-            .py(5.0)
-            .gap(0.0)
+            .py(8.0)
             .center_y()
-            .fill(if i % 2 == 1 { c.layer_01 } else { Color::TRANSPARENT })
-            .child(text(r.title.clone().unwrap_or_else(|| r.key.clone())).font(k.ty.small).color(c.text_base).w(name_w).truncate().px(4.0));
+            .border_sides([0.0, 0.0, 1.0, 0.0], px::SELECTED)
+            .child(text(r.title.clone().unwrap_or_else(|| r.key.clone())).font(rune::TextStyle::new(13.0, 400.0).mono()).color(px::SOFT).w(name_w).truncate().px(8.0));
         for m in &d.metrics {
             line = line.child(cell(d, m, r, cell_w, narrow, k));
         }
         if let Some(items) = &r.items {
             let ids = vec![items.a.clone(), items.b.clone()];
             let label = format!("{} · {} vs {}", r.title.clone().unwrap_or_else(|| r.key.clone()), d.a, d.b);
-            line = line.cursor(rune::Cursor::Pointer).role("button").help("Open A and B as a compare").on_press(move |s: &mut App| {
+            line = line.cursor(rune::Cursor::Pointer).hover(px::RAISED).role("button").help("Open A and B as a compare").on_press(move |s: &mut App| {
                 s.open(TabKind::Compare, ids.clone(), Some(label.clone()), false, true, None, None);
             });
         }
         list = list.child(line);
     }
     if d.rows.is_empty() {
-        list = list.child(text("No rows yet. The agent adds them as results land.").font(k.ty.small).color(c.text_muted).py(12.0));
+        list = list.child(text("No rows yet. The agent adds them as results land.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).py(12.0));
     }
     let _ = s;
     page.child(col().w_full().grow(1.0).min_h(0.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(list))
@@ -112,21 +119,20 @@ fn plain(x: f64) -> String {
     }
 }
 
-fn cell(_d: &Diff, m: &Metric, r: &board::DiffRow, w: f32, narrow: bool, k: &Kit) -> El {
-    let c = &k.c;
+fn cell(_d: &Diff, m: &Metric, r: &board::DiffRow, w: f32, narrow: bool, _k: &Kit) -> El {
     let (a, b) = (board::num(&r.a, &m.key), board::num(&r.b, &m.key));
     let Some(delta) = board::delta(r, &m.key) else {
         let only = b.or(a).map_or("–".to_owned(), plain);
-        return text(only).font(k.ty.small.features("'tnum' 1")).color(c.text_faint).w(w);
+        return text(only).font(px::pixel(12.0)).color(px::OFF).w(w);
     };
     let tone = match m.verdict(delta) {
-        1 => c.success.fg,
-        -1 => c.danger.fg,
-        _ => c.text_base,
+        1 => px::GOOD,
+        -1 => px::BAD,
+        _ => px::SOFT,
     };
-    let mut cell = col().w(w).gap(0.0).child(text(signed(delta)).font(k.ty.small_medium.features("'tnum' 1")).color(tone));
+    let mut cell = col().w(w).gap(2.0).child(text(signed(delta)).font(px::pixel(13.0)).color(tone));
     if !narrow && let (Some(a), Some(b)) = (a, b) {
-        cell = cell.child(text(format!("{} → {}", plain(a), plain(b))).font(k.ty.small.features("'tnum' 1")).color(c.text_faint).truncate());
+        cell = cell.child(text(format!("{} → {}", plain(a), plain(b))).font(px::pixel(10.0)).color(px::FAINT).truncate());
     }
     cell
 }

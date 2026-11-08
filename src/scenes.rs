@@ -18,6 +18,8 @@ pub const ALL: &[Scene] = &[
     ("board-blind", board_blind),
     ("diff", diff),
     ("pads", pads),
+    ("shared", shared),
+    ("activity", activity),
     ("palette", palette),
     ("palette-search", palette_search),
     ("board-search", board_search),
@@ -120,6 +122,15 @@ fn single(s: &mut App) {
     s.settle_now();
 }
 
+fn activity(s: &mut App) {
+    single(s);
+    use crate::jobs::{JobKind, Phase};
+    s.jobs.stage(JobKind::Earshot, "earshot describe · click-120", "click-120.wav", 2, Some(5), Phase::Running);
+    s.jobs.stage(JobKind::Fetch, "Downloading run-b", "take-4.wav", 14, Some(40), Phase::Running);
+    s.activity_open = true;
+    s.pane_tab = "EARSHOT".into();
+}
+
 fn compare(s: &mut App) {
     reset(s);
     let id = s.open(TabKind::Compare, ids(&["tone-a", "tone-b", "whoosh"]), Some("Tones vs whoosh".into()), false, true, None, None);
@@ -214,6 +225,27 @@ fn board_search(s: &mut App) {
 fn keys(s: &mut App) {
     board(s);
     s.keys_help = true;
+}
+
+fn shared(s: &mut App) {
+    reset(s);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let share = |slug: &str, title: &str, ago: u64, files: usize, audio: &str, gone: bool| crate::share::Share {
+        slug: slug.into(),
+        title: title.into(),
+        url: format!("https://pages.example.com/{slug}"),
+        created: now - ago,
+        files,
+        audio: audio.into(),
+        gone,
+    };
+    s.shares = vec![
+        share("best-picks", "Best picks", 600, 7, "bundle", false),
+        share("tones-vs-whoosh", "Tones vs whoosh", 7200, 3, "s3://bucket/shares/tones", false),
+        share("ui-sounds", "UI sounds", 3 * 86400, 12, "bundle", true),
+    ];
+    s.open_shared();
+    s.shares_checked = Some(Ok(()));
 }
 
 fn diff(s: &mut App) {
