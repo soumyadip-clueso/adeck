@@ -6,113 +6,263 @@
 <title>__TITLE__</title>
 <style>
 :root {
-  --page: #0e0f11; --layer: #16181b; --layer2: #1d2024; --line: #2a2e33; --line2: #3a3f46;
-  --text: #eceef0; --muted: #9aa1a9; --faint: #6b727a; --accent: #5b8cff; --accent2: #ff8a4c;
-  --good: #3ecf8e; --close: #e8b931; --bad: #ff6b6b; --wave: #7f9cc9; --wave-on: #b9cdf5;
-  --radius: 12px;
+  --page: #0c0d0f; --layer: #141518; --layer2: #1b1d21; --layer3: #23262b; --line: #26292e; --line2: #353940;
+  --text: #eceef0; --muted: #9aa1a9; --faint: #666d75; --accent: #6b95ff; --accent2: #ff8a4c;
+  --good: #3ecf8e; --close: #e8b931; --bad: #ff6b6b; --wave: #5d7398; --wave-on: #b9cdf5;
+  --shadow: 0 18px 48px rgba(0,0,0,.45); --radius: 12px;
+}
+:root[data-theme="light"] {
+  --page: #f5f6f8; --layer: #ffffff; --layer2: #f0f2f5; --layer3: #e7eaee; --line: #e3e6ea; --line2: #cfd4db;
+  --text: #15181c; --muted: #59616c; --faint: #8a929c; --wave: #8597b8; --wave-on: #2f5fd0; --shadow: 0 18px 48px rgba(20,30,50,.16);
 }
 @media (prefers-color-scheme: light) {
-  :root { --page: #f6f7f9; --layer: #ffffff; --layer2: #f0f2f5; --line: #e2e5ea; --line2: #cfd4db;
-    --text: #15181c; --muted: #5d6570; --faint: #8a929c; --wave: #8fa6cc; --wave-on: #2f5fd0; }
+  :root:not([data-theme="dark"]) {
+    --page: #f5f6f8; --layer: #ffffff; --layer2: #f0f2f5; --layer3: #e7eaee; --line: #e3e6ea; --line2: #cfd4db;
+    --text: #15181c; --muted: #59616c; --faint: #8a929c; --wave: #8597b8; --wave-on: #2f5fd0; --shadow: 0 18px 48px rgba(20,30,50,.16);
+  }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
-.wrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 80px; }
-header h1 { font-size: 26px; letter-spacing: -0.01em; margin: 0 0 4px; }
-header .sub { color: var(--muted); font-size: 13px; }
-.note { margin: 18px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--layer); color: var(--text); }
-.bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 22px -16px 0; padding: 10px 16px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
-.bar .sp { flex: 1; }
-.btn { appearance: none; border: 1px solid var(--line2); background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 8px; cursor: pointer; transition: background .15s, border-color .15s, transform .08s; }
+html { scroll-padding-top: 72px; }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; padding-bottom: 96px; }
+button { font: inherit; color: inherit; }
+.btn { appearance: none; border: 1px solid var(--line2); background: transparent; font-size: 13px; padding: 5px 11px; border-radius: 8px; cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s, transform .08s; }
 .btn:hover { background: var(--layer2); }
 .btn:active { transform: scale(.97); }
 .btn.on { background: var(--text); color: var(--page); border-color: var(--text); }
-.play { width: 34px; height: 34px; border-radius: 50%; display: inline-grid; place-items: center; padding: 0; background: var(--text); color: var(--page); border: 0; }
-.play svg { width: 14px; height: 14px; }
-.clock { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 96px; }
-.keys { color: var(--faint); font-size: 12px; }
-input[type=range] { accent-color: var(--accent); width: 110px; }
-.group { margin-top: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--layer); padding: 16px; transition: border-color .2s, box-shadow .2s; }
-.group.focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-.ghead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.ghead h2 { margin: 0; font-size: 17px; }
+.icon { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; border: 0; background: transparent; border-radius: 8px; cursor: pointer; color: var(--muted); }
+.icon:hover { background: var(--layer2); color: var(--text); }
+.icon svg { width: 16px; height: 16px; }
+.kbd { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; font-size: 11px; color: var(--muted); border: 1px solid var(--line2); border-radius: 5px; background: var(--layer2); font-variant-numeric: tabular-nums; }
+
+/* Top bar */
+.top { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px; padding: 10px 20px; background: color-mix(in srgb, var(--page) 82%, transparent); backdrop-filter: saturate(1.4) blur(14px); border-bottom: 1px solid var(--line); }
+.mark { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: -.01em; min-width: 0; }
+.mark i { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--accent), var(--accent2)); flex: none; }
+.mark span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search { flex: 1; max-width: 420px; margin: 0 auto; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--layer); color: var(--faint); cursor: pointer; font-size: 13px; transition: border-color .15s; }
+.search:hover { border-color: var(--line2); }
+.search svg { width: 14px; height: 14px; flex: none; }
+.search .sp { flex: 1; }
+.tools { display: flex; align-items: center; gap: 4px; }
+
+/* Layout */
+.shell { max-width: 1240px; margin: 0 auto; padding: 28px 20px 40px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; }
+.shell.solo { grid-template-columns: minmax(0, 1fr); max-width: 1040px; }
+nav.groups { position: sticky; top: 74px; align-self: start; max-height: calc(100vh - 190px); overflow: auto; }
+nav.groups h3 { margin: 4px 10px 8px; font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+nav.groups a { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: 13.5px; transition: background .15s, color .15s; }
+nav.groups a:hover { background: var(--layer2); color: var(--text); }
+nav.groups a.on { background: var(--layer2); color: var(--text); }
+nav.groups a .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+nav.groups a .n { margin-left: auto; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dot.good { background: var(--good) !important; } .dot.close { background: var(--close) !important; } .dot.bad { background: var(--bad) !important; }
+
+header.hero h1 { font-size: 30px; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 8px; }
+header.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 13px; }
+header.hero .meta span + span::before { content: "·"; margin-right: 14px; color: var(--faint); }
+.note { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--layer); }
+.note small { display: block; font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+
+.group { margin-top: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--layer); padding: 16px 16px 12px; transition: border-color .2s, box-shadow .2s; }
+.group.focus { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.group.hidden, .row.hidden, .pad.hidden { display: none; }
+.ghead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.ghead h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
 .ghead .sub { color: var(--faint); font-size: 12.5px; }
 .ghead .sp { flex: 1; }
-.chip { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap; }
+.chip { font-size: 11.5px; padding: 2px 9px; border-radius: 99px; white-space: nowrap; background: color-mix(in srgb, currentColor 14%, transparent); }
 .chip.good { color: var(--good); } .chip.close { color: var(--close); } .chip.bad { color: var(--bad); } .chip.neutral { color: var(--muted); }
+
+.ruler { position: relative; height: 16px; margin-left: 232px; color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.ruler span { position: absolute; top: 0; transform: translateX(-50%); }
+.ruler span:first-child { transform: none; }
 .row { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: stretch; margin-top: 8px; }
-.who { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: background .15s, border-color .15s; min-width: 0; }
+.who { position: relative; display: flex; gap: 10px; align-items: center; padding: 9px 11px 9px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: background .15s, border-color .15s; min-width: 0; overflow: hidden; }
+.who::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--rc, var(--line2)); }
 .who:hover { background: var(--layer2); }
-.row.on .who { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.kbd { font-size: 11px; color: var(--faint); border: 1px solid var(--line2); border-radius: 4px; padding: 0 5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.row.on .who { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .who .t { min-width: 0; flex: 1; }
 .who .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .who .nums { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.role { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-.role.pick { color: var(--accent); } .role.ref { color: var(--accent2); } .role.before { color: var(--faint); }
+.role { font-size: 10.5px; font-weight: 600; color: var(--rc, var(--muted)); text-transform: uppercase; letter-spacing: .06em; }
+.wavebox { position: relative; }
 canvas.wave { width: 100%; height: 64px; display: block; border-radius: 10px; background: var(--layer2); cursor: pointer; touch-action: none; }
+.tip { position: absolute; top: -24px; padding: 2px 6px; border-radius: 5px; background: var(--layer3); color: var(--text); font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; opacity: 0; transform: translateX(-50%); transition: opacity .12s; }
+.wavebox:hover .tip { opacity: 1; }
 .local { display: grid; place-items: center; height: 64px; border: 1px dashed var(--line2); border-radius: 10px; color: var(--faint); font-size: 12.5px; }
 details.meta { grid-column: 2; margin-top: -2px; }
-details.meta summary { color: var(--faint); font-size: 12px; cursor: pointer; list-style: none; }
+details.meta summary { color: var(--faint); font-size: 12px; cursor: pointer; list-style: none; width: max-content; }
+details.meta summary::-webkit-details-marker { display: none; }
 details.meta summary::before { content: "▸ "; } details.meta[open] summary::before { content: "▾ "; }
-details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 6px 0 0; font-size: 12.5px; }
+details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 6px 0 2px; font-size: 12.5px; }
 details.meta dt { color: var(--faint); } details.meta dd { margin: 0; word-break: break-word; }
-.pads { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
-.pad { position: relative; overflow: hidden; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--layer2); color: var(--text); font: inherit; padding: 11px 12px 14px; min-height: 104px; cursor: pointer; transition: transform .1s, background .15s, border-color .15s; }
+
+.pads { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.pad { position: relative; overflow: hidden; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--layer2); padding: 11px 12px 14px; min-height: 108px; cursor: pointer; transition: transform .1s, background .15s, border-color .15s; }
+.pad::before { content: ""; position: absolute; left: 0; top: 0; right: 0; height: 2px; background: var(--rc, transparent); opacity: .8; }
 .pad:hover { border-color: var(--line2); }
 .pad:active { transform: scale(.98); }
-.pad.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--layer2)); }
-.pad .name { font-size: 16px; font-weight: 600; margin: 6px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pad.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, var(--layer2)); }
+.pad .name { font-size: 16px; font-weight: 600; margin: 8px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pad .nums { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .pad .fill { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--accent); }
-.pad[disabled] { cursor: default; opacity: .6; }
-footer { margin-top: 40px; color: var(--faint); font-size: 12px; text-align: center; }
+.pad[disabled] { cursor: default; opacity: .55; }
+.pad .ptop { display: flex; align-items: center; gap: 6px; }
+.empty { margin-top: 28px; padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line2); border-radius: 14px; }
+footer { margin-top: 36px; color: var(--faint); font-size: 12px; }
+
+/* Bottom player */
+.player { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20; width: min(920px, calc(100vw - 24px)); display: flex; align-items: center; gap: 14px; padding: 10px 14px; border: 1px solid var(--line2); border-radius: 16px; background: color-mix(in srgb, var(--layer) 90%, transparent); backdrop-filter: blur(16px); box-shadow: var(--shadow); }
+.play { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; padding: 0; background: var(--text); color: var(--page); border: 0; cursor: pointer; flex: none; transition: transform .08s; }
+.play:active { transform: scale(.94); }
+.play svg { width: 14px; height: 14px; }
+.np { min-width: 0; flex: 1; }
+.np .what { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .what span { color: var(--muted); font-weight: 400; }
+.scrub { position: relative; height: 16px; margin-top: 2px; cursor: pointer; touch-action: none; }
+.scrub::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 3px; border-radius: 2px; background: var(--layer3); }
+.scrub i { position: absolute; left: 0; top: 7px; height: 3px; border-radius: 2px; background: var(--accent); width: 0; }
+.clock { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+input[type=range] { accent-color: var(--accent); width: 90px; }
+
+/* Palette and help */
+.scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.36); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.panel { width: min(620px, calc(100vw - 24px)); border: 1px solid var(--line2); border-radius: 14px; background: var(--layer); box-shadow: var(--shadow); overflow: hidden; transform: translateY(-8px) scale(.985); transition: transform .18s cubic-bezier(.2,.8,.2,1); }
+.scrim.open .panel { transform: none; }
+.panel .q { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); color: var(--faint); }
+.panel .q input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 16px; }
+.panel .list { max-height: 380px; overflow: auto; padding: 6px; }
+.panel .sec { padding: 8px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--faint); }
+.panel .hit { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.panel .hit.on { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.panel .hit b { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel .hit span { color: var(--faint); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel .foot { display: flex; gap: 14px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+.panel .none { padding: 18px 12px; color: var(--muted); }
+.help dl { display: grid; grid-template-columns: max-content 1fr; gap: 10px 18px; margin: 0; padding: 18px 20px; font-size: 13.5px; }
+.help dt { display: flex; gap: 4px; justify-content: flex-end; }
+.help h3 { margin: 0; padding: 14px 20px 0; font-size: 15px; }
+.toast { position: fixed; left: 50%; bottom: 90px; transform: translate(-50%, 10px); z-index: 50; padding: 8px 14px; border-radius: 10px; background: var(--text); color: var(--page); font-size: 13px; opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+nav.chips { display: none; }
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); padding: 20px 16px 32px; }
+  nav.groups { display: none; }
+  nav.chips { display: flex; gap: 8px; overflow-x: auto; margin: 16px -16px 0; padding: 0 16px 4px; scrollbar-width: none; }
+  nav.chips a { flex: none; display: flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); text-decoration: none; font-size: 13px; background: var(--layer); }
+  nav.chips a.on { color: var(--text); border-color: var(--line2); }
+  nav.chips .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+}
 @media (max-width: 640px) {
+  .top { padding: 8px 12px; gap: 8px; }
+  .search .label, .search .kbd { display: none; }
+  .search { flex: none; width: 34px; padding: 0; justify-content: center; margin: 0 0 0 auto; }
+  .mark span { max-width: 46vw; }
+  header.hero h1 { font-size: 24px; }
   .row { grid-template-columns: 1fr; gap: 6px; }
+  .ruler { margin-left: 0; }
   details.meta { grid-column: 1; }
-  .keys { display: none; }
+  .player { gap: 10px; padding: 8px 10px; bottom: 10px; }
+  .player .vol, .player #match { display: none; }
 }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1 id="title"></h1>
-    <div class="sub" id="sub"></div>
-    <div class="note" id="note" hidden></div>
-  </header>
-  <div class="bar">
-    <button class="play" id="play" aria-label="Play"><svg viewBox="0 0 16 16"><path id="playicon" d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg></button>
-    <span class="clock" id="clock">0:00.0</span>
-    <span class="keys">Space play · 1–9 switch · ↑↓ group</span>
-    <span class="sp"></span>
-    <button class="btn on" id="match" title="Play every sound at the same loudness">Match loudness</button>
-    <label class="keys" style="display:flex;gap:6px;align-items:center">Volume <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9"></label>
+<div class="top">
+  <div class="mark"><i></i><span id="topTitle"></span></div>
+  <button class="search" id="openPalette" aria-label="Search sounds"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14" stroke-linecap="round"/></svg><span class="label">Search groups and sounds</span><span class="sp"></span><span class="kbd">⌘K</span></button>
+  <div class="tools">
+    <button class="icon" id="copy" title="Copy link"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M6.5 9.5l3-3M7 4.5l1.2-1.2a2.5 2.5 0 013.5 3.5L10.5 8M9 11.5l-1.2 1.2a2.5 2.5 0 01-3.5-3.5L5.5 8"/></svg></button>
+    <button class="icon" id="theme" title="Theme: auto"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 000-11z" fill="currentColor"/></svg></button>
+    <button class="icon" id="helpBtn" title="Keyboard shortcuts · ?"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1.75" y="4" width="12.5" height="8" rx="1.5"/><path d="M4.5 7h.01M7 7h.01M9.5 7h.01M12 7h.01M5 9.5h6"/></svg></button>
   </div>
-  <main id="groups"></main>
-  <footer>Shared from adeck. Reference-pack sounds stay on the sharer's machine.</footer>
 </div>
+
+<div class="shell" id="shell">
+  <nav class="groups" id="nav" aria-label="Groups"></nav>
+  <main>
+    <header class="hero">
+      <h1 id="title"></h1>
+      <div class="meta" id="meta"></div>
+      <div class="note" id="note" hidden><small>What to listen for</small><div id="noteText"></div></div>
+      <nav class="chips" id="chips" aria-label="Groups"></nav>
+    </header>
+    <div id="groups"></div>
+    <div class="empty" id="empty" hidden></div>
+    <footer>Shared from adeck. Reference-pack sounds stay on the sharer’s machine.</footer>
+  </main>
+</div>
+
+<div class="player" role="region" aria-label="Player">
+  <button class="play" id="play" aria-label="Play"><svg viewBox="0 0 16 16"><path id="playicon" d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg></button>
+  <div class="np">
+    <div class="what" id="what">Press play, or a number key</div>
+    <div class="scrub" id="scrub"><i id="bar"></i></div>
+  </div>
+  <span class="clock" id="clock">0:00.0</span>
+  <button class="btn on" id="match" title="Play every sound at the same loudness · M">Match loudness</button>
+  <label class="vol" title="Volume"><input type="range" id="vol" min="0" max="1" step="0.01" value="0.9" aria-label="Volume"></label>
+</div>
+
+<div class="scrim" id="palette"><div class="panel" role="dialog" aria-label="Search">
+  <div class="q"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14" stroke-linecap="round"/></svg><input id="pq" placeholder="Search groups and sounds…" autocomplete="off" spellcheck="false"></div>
+  <div class="list" id="plist"></div>
+  <div class="foot"><span class="kbd">↑↓</span> move <span class="kbd">↵</span> play <span class="kbd">esc</span> close</div>
+</div></div>
+
+<div class="scrim" id="help"><div class="panel help" role="dialog" aria-label="Keyboard shortcuts">
+  <h3>Keyboard</h3>
+  <dl>
+    <dt><span class="kbd">Space</span></dt><dd>Play or pause</dd>
+    <dt><span class="kbd">1</span>–<span class="kbd">9</span></dt><dd>Switch to that sound, at the same moment</dd>
+    <dt><span class="kbd">↑</span><span class="kbd">↓</span></dt><dd>Previous or next group</dd>
+    <dt><span class="kbd">←</span><span class="kbd">→</span></dt><dd>Back or forward 2 seconds</dd>
+    <dt><span class="kbd">M</span></dt><dd>Match loudness on or off</dd>
+    <dt><span class="kbd">⌘K</span><span class="kbd">/</span></dt><dd>Search groups and sounds</dd>
+    <dt><span class="kbd">?</span></dt><dd>This list</dd>
+  </dl>
+</div></div>
+<div class="toast" id="toast"></div>
+
 <script id="data" type="application/json">/*__DATA__*/null</script>
 <script>
 (() => {
 const D = JSON.parse(document.getElementById('data').textContent);
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const h = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
 const fmt = s => { s = Math.max(0, s || 0); const m = Math.floor(s / 60); return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`; };
+const store = { get: k => { try { return localStorage.getItem(k); } catch (_) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} } };
 const TARGET = -16;
-document.title = D.title;
-$('#title').textContent = D.title;
-const n = D.groups.reduce((a, g) => a + g.members.length, 0);
-$('#sub').textContent = `${n} sound${n === 1 ? '' : 's'}${D.groups.length > 1 ? ` in ${D.groups.length} groups` : ''} · ${new Date(D.created * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
-if (D.note) { const el = $('#note'); el.hidden = false; el.innerHTML = D.note.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); }
+const ROLE = { pick: 'var(--accent)', ref: 'var(--accent2)', before: 'var(--faint)', take: 'var(--muted)' };
 
+// Header
+document.title = D.title;
+$('#title').textContent = D.title; $('#topTitle').textContent = D.title;
+const n = D.groups.reduce((a, g) => a + g.members.length, 0);
+const meta = [`${n} sound${n === 1 ? '' : 's'}`];
+if (D.groups.length > 1) meta.push(`${D.groups.length} groups`);
+meta.push(new Date(D.created * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }));
+meta.forEach(t => $('#meta').append(h('span', null, t)));
+if (D.note) { $('#note').hidden = false; $('#noteText').innerHTML = D.note.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); }
+
+// Theme: auto → light → dark
+const themes = ['auto', 'light', 'dark'];
+let theme = store.get('adeck-theme') || 'auto';
+const applyTheme = () => { if (theme === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme; $('#theme').title = `Theme: ${theme}`; draw(); };
+$('#theme').addEventListener('click', () => { theme = themes[(themes.indexOf(theme) + 1) % 3]; store.set('adeck-theme', theme); applyTheme(); });
+
+const toast = msg => { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1600); };
+$('#copy').addEventListener('click', () => { const u = location.href.split('#')[0]; (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(() => toast('Link copied'), () => toast(u)); });
+
+// Audio: one group plays at a time; every member of it runs in step and only the gains move.
 let ctx = null, master = null, matchOn = true;
 const audio = () => { if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); master = ctx.createGain(); master.gain.value = +$('#vol').value; master.connect(ctx.destination); } return ctx; };
 const buffers = new Map();
 const load = src => { if (!buffers.has(src)) buffers.set(src, fetch(src).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then(b => audio().decodeAudioData(b))); return buffers.get(src); };
 const trim = m => matchOn && m.lufs != null ? Math.min(4, Math.pow(10, (TARGET - m.lufs) / 20)) : 1;
-
-// One group plays at a time; every member of it runs in step and only the gains move.
 const P = { g: null, active: 0, playing: false, at: 0, started: 0, nodes: [], once: false };
 const groupEls = [];
 const len = g => Math.max(0.001, ...g.members.map(m => m.secs || 0));
@@ -146,95 +296,191 @@ function select(g, i, fromTop) {
   if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(x.i === i ? trim(D.groups[g].members[x.i]) : 0, ctx.currentTime, 0.004));
   draw();
 }
-function toggle() { if (P.g == null) P.g = 0; P.playing ? pause() : start(P.g, P.at >= len(D.groups[P.g]) - 0.01 ? 0 : P.at, false); }
+function toggle() { if (P.g == null) P.g = firstVisible(); P.playing ? pause() : start(P.g, P.at >= len(D.groups[P.g]) - 0.01 ? 0 : P.at, false); }
 function seek(g, at, silent) { const was = P.playing && P.g === g; if (P.g !== g) focus(g); pause(); P.at = Math.max(0, Math.min(at, len(D.groups[g]))); if (was && !silent) start(g, P.at, false); draw(); }
+const setMatch = on => { matchOn = on; $('#match').classList.toggle('on', on); if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(x.i === P.active ? trim(D.groups[P.g].members[x.i]) : 0, ctx.currentTime, 0.004)); };
 
-function waveCanvas(m, gi, mi) {
-  const c = h('canvas', 'wave'); c.dataset.g = gi; c.dataset.m = mi;
+// Drag along a strip or the player's bar to move the playhead silently; it resumes on release.
+function scrubber(el, gi, frac) {
   let resume = false;
-  const at = e => { const r = c.getBoundingClientRect(); return (e.clientX - r.left) / r.width * len(D.groups[gi]); };
-  c.addEventListener('pointerdown', e => { c.setPointerCapture(e.pointerId); resume = P.playing && P.g === gi; if (P.active !== mi || P.g !== gi) { focus(gi); P.active = mi; } seek(gi, at(e), true); });
-  c.addEventListener('pointermove', e => { if (c.hasPointerCapture(e.pointerId)) seek(gi, at(e), true); });
-  c.addEventListener('pointerup', e => { seek(gi, at(e), true); if (resume) start(gi, P.at, false); });
-  return c;
+  const g = () => typeof gi === 'function' ? gi() : gi;
+  const at = e => { const r = el.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * len(D.groups[g()]); };
+  el.addEventListener('pointerdown', e => { if (g() == null) return; el.setPointerCapture(e.pointerId); resume = P.playing && P.g === g(); frac && frac(); seek(g(), at(e), true); });
+  el.addEventListener('pointermove', e => { if (el.hasPointerCapture(e.pointerId)) seek(g(), at(e), true); });
+  el.addEventListener('pointerup', e => { if (!el.hasPointerCapture(e.pointerId)) return; seek(g(), at(e), true); if (resume) start(g(), P.at, false); });
 }
+
 function paintWave(c) {
   const gi = +c.dataset.g, mi = +c.dataset.m, g = D.groups[gi], m = g.members[mi];
   const dpr = window.devicePixelRatio || 1, w = c.clientWidth, hh = c.clientHeight;
-  if (c.width !== w * dpr) { c.width = w * dpr; c.height = hh * dpr; }
+  if (!w) return;
+  if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(hh * dpr); }
   const x = c.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, hh);
   const css = getComputedStyle(document.documentElement);
   const on = P.g === gi && P.active === mi;
   const frac = (m.secs || 0) / len(g), pk = m.peaks || [], mid = hh / 2, ww = w * frac;
   const top = Math.max(0.05, ...pk);
   const ph = P.g === gi ? now() / len(g) * w : -1;
+  const [wave, waveOn] = [css.getPropertyValue('--wave'), css.getPropertyValue('--wave-on')];
   for (let i = 0; i < pk.length; i++) {
     const px = i / pk.length * ww, a = Math.max(0.6, pk[i] / top * (hh / 2 - 6));
-    x.fillStyle = px < ph && on ? css.getPropertyValue('--wave-on') : css.getPropertyValue('--wave');
-    x.globalAlpha = on ? 1 : 0.7;
+    x.fillStyle = on && px < ph ? waveOn : wave;
+    x.globalAlpha = on ? 1 : 0.75;
     x.fillRect(px, mid - a, Math.max(1, ww / pk.length - 0.4), a * 2);
   }
   x.globalAlpha = 1;
   if (ph >= 0) { x.fillStyle = css.getPropertyValue('--text'); x.fillRect(ph, 0, 1.5, hh); }
 }
-function nums(m) { return Object.entries(m.numbers || {}).map(([k, v]) => `${(D.labels || {})[k] || k} ${typeof v === 'number' ? +v.toFixed(3) : v}`).join(' · ') || (m.lufs != null ? `${m.lufs.toFixed(1)} LUFS` : ''); }
+const nums = m => Object.entries(m.numbers || {}).map(([k, v]) => `${(D.labels || {})[k] || k} ${typeof v === 'number' ? +v.toFixed(3) : v}`).join(' · ') || (m.lufs != null ? `${m.lufs.toFixed(1)} LUFS` : '');
+const ticks = secs => { const step = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60].find(s => secs / s <= 8) || 120; const out = []; for (let t = 0; t <= secs + 1e-6; t += step) out.push(t); return out; };
 
+// Groups
+const tone = g => g.chip ? (g.chip.tone || 'neutral') : '';
 D.groups.forEach((g, gi) => {
-  const el = h('section', 'group'); el.addEventListener('pointerdown', () => focus(gi));
+  const id = `g${gi}`;
+  const el = h('section', 'group'); el.id = id; el.dataset.g = gi;
+  el.addEventListener('pointerdown', () => focus(gi));
   const head = h('div', 'ghead'); head.append(h('h2', null, g.title || D.title));
   if (g.subtitle) head.append(h('span', 'sub', g.subtitle));
   head.append(h('span', 'sp'));
-  if (g.chip) head.append(h('span', `chip ${g.chip.tone || 'neutral'}`, g.chip.text));
+  if (g.chip) head.append(h('span', `chip ${tone(g)}`, g.chip.text));
   el.append(head);
   if (g.layout === 'pads') {
     const grid = h('div', 'pads');
     g.members.forEach((m, mi) => {
-      const b = h('button', 'pad'); b.dataset.g = gi; b.dataset.m = mi; b.disabled = !m.src;
-      const top = h('div'); top.append(h('span', 'kbd', mi < 9 ? String(mi + 1) : ''), document.createTextNode(' '), h('span', `role ${m.role || ''}`, m.src ? (m.role || '') : 'local only'));
+      const b = h('button', 'pad'); b.dataset.g = gi; b.dataset.m = mi; b.disabled = !m.src; b.style.setProperty('--rc', ROLE[m.role] || 'transparent');
+      const top = h('div', 'ptop'); top.append(h('span', 'kbd', mi < 9 ? String(mi + 1) : '·'), h('span', 'role', m.src ? (m.role || '') : 'local only'));
       b.append(top, h('div', 'name', m.label), h('div', 'nums', nums(m)), h('div', 'fill'));
       b.addEventListener('click', () => select(gi, mi, true));
       grid.append(b);
     });
     el.append(grid);
   } else {
+    const ruler = h('div', 'ruler'); const L = len(g);
+    const lab = t => L < 60 ? `${+t.toFixed(2)}s` : fmt(t).replace(/\.0$/, '');
+    ticks(L).forEach(t => { const s = h('span', null, lab(t)); s.style.left = `${t / L * 100}%`; ruler.append(s); });
+    el.append(ruler);
     g.members.forEach((m, mi) => {
-      const row = h('div', 'row'); row.dataset.g = gi; row.dataset.m = mi;
-      const who = h('div', 'who'); who.append(h('span', 'kbd', mi < 9 ? String(mi + 1) : ''));
-      const t = h('div', 't'); t.append(h('div', `role ${m.role || ''}`, m.role || ''), h('div', 'name', m.label), h('div', 'nums', nums(m)));
+      const row = h('div', 'row'); row.dataset.g = gi; row.dataset.m = mi; row.style.setProperty('--rc', ROLE[m.role] || 'var(--line2)');
+      const who = h('div', 'who'); who.append(h('span', 'kbd', mi < 9 ? String(mi + 1) : '·'));
+      const t = h('div', 't'); if (m.role) t.append(h('div', 'role', m.role)); t.append(h('div', 'name', m.label)); const nm = nums(m); if (nm) t.append(h('div', 'nums', nm));
       who.append(t); who.addEventListener('click', () => select(gi, mi, false));
-      row.append(who, m.src ? waveCanvas(m, gi, mi) : h('div', 'local', 'Reference: plays only on the sharer’s machine'));
-      const meta = Object.entries(m.meta || {});
-      if (meta.length) { const d = h('details', 'meta'); d.append(h('summary', null, 'Details')); const dl = h('dl'); meta.forEach(([k, v]) => dl.append(h('dt', null, k), h('dd', null, v))); d.append(dl); row.append(h('div'), d); }
+      if (m.src) {
+        const box = h('div', 'wavebox'), c = h('canvas', 'wave'), tip = h('div', 'tip');
+        c.dataset.g = gi; c.dataset.m = mi; box.append(c, tip);
+        c.addEventListener('pointermove', e => { const r = c.getBoundingClientRect(), f = (e.clientX - r.left) / r.width; tip.style.left = `${f * 100}%`; tip.textContent = fmt(f * L); });
+        scrubber(c, gi, () => { if (P.active !== mi || P.g !== gi) { focus(gi); P.active = mi; } });
+        row.append(who, box);
+      } else row.append(who, h('div', 'local', 'Reference: plays only on the sharer’s machine'));
+      const md = Object.entries(m.meta || {});
+      if (md.length) { const d = h('details', 'meta'); d.append(h('summary', null, 'Details')); const dl = h('dl'); md.forEach(([k, v]) => dl.append(h('dt', null, k), h('dd', null, v))); d.append(dl); row.append(h('div'), d); }
       el.append(row);
     });
   }
   groupEls.push(el); $('#groups').append(el);
 });
 
+// Group nav: a sidebar on wide screens, a chip row on narrow ones; only when there's more than one.
+if (D.groups.length > 1) {
+  $('#nav').append(h('h3', null, 'Groups'));
+  D.groups.forEach((g, gi) => {
+    for (const where of ['#nav', '#chips']) {
+      const a = h('a'); a.href = `#g${gi}`; a.dataset.g = gi;
+      a.append(Object.assign(h('i', `dot ${tone(g)}`), {}), document.createTextNode(g.title || `Group ${gi + 1}`));
+      if (where === '#nav') a.append(h('span', 'n', String(g.members.length)));
+      a.addEventListener('click', () => focus(gi));
+      $(where).append(a);
+    }
+  });
+} else { $('#shell').classList.add('solo'); $('#nav').remove(); }
+const firstVisible = () => Math.max(0, groupEls.findIndex(el => !el.classList.contains('hidden')));
+
 function draw() {
   groupEls.forEach((el, gi) => el.classList.toggle('focus', P.g === gi && D.groups.length > 1));
-  document.querySelectorAll('.row, .pad').forEach(r => r.classList.toggle('on', P.g === +r.dataset.g && P.active === +r.dataset.m));
+  $$('nav a').forEach(a => a.classList.toggle('on', P.g === +a.dataset.g));
+  $$('.row, .pad').forEach(r => r.classList.toggle('on', P.g === +r.dataset.g && P.active === +r.dataset.m));
   $('#playicon').setAttribute('d', P.playing ? 'M4 2.5h3v11H4zM9 2.5h3v11H9z' : 'M4 2.5v11l9-5.5z');
-  $('#clock').textContent = P.g == null ? '0:00.0' : `${fmt(now())} / ${fmt(len(D.groups[P.g]))}`;
-  document.querySelectorAll('canvas.wave').forEach(paintWave);
-  document.querySelectorAll('.pad').forEach(p => { const on = P.playing && P.g === +p.dataset.g && P.active === +p.dataset.m; const m = D.groups[+p.dataset.g].members[+p.dataset.m]; $('.fill', p).style.width = on ? `${Math.min(100, now() / (m.secs || 1) * 100)}%` : '0'; });
+  $('#play').setAttribute('aria-label', P.playing ? 'Pause' : 'Play');
+  if (P.g != null) {
+    const g = D.groups[P.g], m = g.members[P.active];
+    $('#what').innerHTML = ''; $('#what').append(document.createTextNode(m ? m.label : ''), h('span', null, D.groups.length > 1 || g.title !== D.title ? `  ·  ${g.title}` : ''));
+    $('#clock').textContent = `${fmt(now())} / ${fmt(P.once && m ? m.secs : len(g))}`;
+    $('#bar').style.width = `${Math.min(100, now() / (P.once && m ? (m.secs || 1) : len(g)) * 100)}%`;
+  }
+  $$('canvas.wave').forEach(paintWave);
+  $$('.pad').forEach(p => { const on = P.playing && P.g === +p.dataset.g && P.active === +p.dataset.m; const m = D.groups[+p.dataset.g].members[+p.dataset.m]; $('.fill', p).style.width = on ? `${Math.min(100, now() / (m.secs || 1) * 100)}%` : '0'; });
 }
 (function tick() {
   if (P.playing) { const end = P.once ? (D.groups[P.g].members[P.active].secs || 0) : len(D.groups[P.g]); if (now() >= end) { P.playing = false; P.at = P.once ? 0 : end; stopNodes(); } draw(); }
   requestAnimationFrame(tick);
 })();
-window.addEventListener('resize', draw);
+scrubber($('#scrub'), () => P.g);
+
+// ⌘K / "/": jump to any group or sound and play it.
+const items = [];
+D.groups.forEach((g, gi) => {
+  items.push({ sec: 'Groups', title: g.title || D.title, sub: [g.subtitle, g.chip && g.chip.text].filter(Boolean).join(' · '), gi, mi: null });
+  g.members.forEach((m, mi) => items.push({ sec: 'Sounds', title: m.label, sub: [g.title, m.role, Object.values(m.meta || {}).slice(0, 2).join(' ')].filter(Boolean).join(' · '), gi, mi }));
+});
+const score = (q, s) => { s = s.toLowerCase(); const i = s.indexOf(q); if (i >= 0) return 100 - i; let at = 0, sc = 0; for (const c of q) { const j = s.indexOf(c, at); if (j < 0) return -1; sc += (j === 0 || /\W/.test(s[j - 1])) ? 8 : (j === at ? 3 : -2); at = j + 1; } return sc > q.length * 2 ? sc : -1; };
+let hits = [], active = 0;
+function renderPalette() {
+  const q = $('#pq').value.trim().toLowerCase();
+  hits = q ? items.map(it => [Math.max(score(q, it.title) + 10, score(q, `${it.title} ${it.sub}`)), it]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).map(x => x[1]) : items.slice(0, 40);
+  const order = [...new Set(hits.map(x => x.sec))];
+  hits.sort((a, b) => order.indexOf(a.sec) - order.indexOf(b.sec));
+  active = Math.min(active, Math.max(0, hits.length - 1));
+  const list = $('#plist'); list.innerHTML = '';
+  let sec = '';
+  hits.forEach((it, i) => {
+    if (it.sec !== sec) { sec = it.sec; list.append(h('div', 'sec', sec)); }
+    const r = h('div', `hit${i === active ? ' on' : ''}`); r.append(h('b', null, it.title), h('span', null, it.sub));
+    r.addEventListener('mousemove', () => { if (active !== i) { active = i; renderPalette(); } });
+    r.addEventListener('click', () => choose(it));
+    list.append(r);
+  });
+  if (!hits.length) list.append(h('div', 'none', `Nothing matches “${$('#pq').value}”`));
+  const on = $('.hit.on', list); if (on) on.scrollIntoView({ block: 'nearest' });
+}
+function choose(it) {
+  closeAll();
+  groupEls[it.gi].scrollIntoView({ block: 'start', behavior: 'smooth' });
+  if (it.mi == null) focus(it.gi); else select(it.gi, it.mi, true);
+}
+const openPalette = () => { $('#help').classList.remove('open'); $('#palette').classList.add('open'); $('#pq').value = ''; active = 0; renderPalette(); setTimeout(() => $('#pq').focus(), 0); };
+const closeAll = () => { $$('.scrim').forEach(s => s.classList.remove('open')); $('#pq').blur(); };
+$('#openPalette').addEventListener('click', openPalette);
+$('#helpBtn').addEventListener('click', () => $('#help').classList.toggle('open'));
+$$('.scrim').forEach(s => s.addEventListener('pointerdown', e => { if (e.target === s) closeAll(); }));
+$('#pq').addEventListener('input', () => { active = 0; renderPalette(); });
+$('#pq').addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (hits.length) { active = (active + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length; renderPalette(); } }
+  else if (e.key === 'Enter') { e.preventDefault(); if (hits[active]) choose(hits[active]); }
+  else if (e.key === 'Escape') closeAll();
+});
+
 $('#play').addEventListener('click', toggle);
-$('#match').addEventListener('click', e => { matchOn = !matchOn; e.currentTarget.classList.toggle('on', matchOn); if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(x.i === P.active ? trim(D.groups[P.g].members[x.i]) : 0, ctx.currentTime, 0.004)); });
+$('#match').addEventListener('click', () => setMatch(!matchOn));
 $('#vol').addEventListener('input', e => { if (master) master.gain.value = +e.target.value; });
 document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#palette').classList.contains('open') ? closeAll() : openPalette(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /input|textarea/i.test(e.target.tagName)) return;
-  if (e.key === ' ') { e.preventDefault(); toggle(); }
-  else if (/^[1-9]$/.test(e.key)) { const g = P.g ?? 0, i = +e.key - 1; if (i < D.groups[g].members.length) select(g, i, false); }
+  if (e.key === 'Escape') { closeAll(); return; }
+  if (e.key === '/') { e.preventDefault(); openPalette(); }
+  else if (e.key === '?') $('#help').classList.toggle('open');
+  else if (e.key === ' ') { e.preventDefault(); toggle(); }
+  else if (e.key === 'm' || e.key === 'M') setMatch(!matchOn);
+  else if (/^[1-9]$/.test(e.key)) { const g = P.g ?? firstVisible(), i = +e.key - 1; if (i < D.groups[g].members.length) select(g, i, false); }
   else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const g = Math.max(0, Math.min(D.groups.length - 1, (P.g ?? -1) + (e.key === 'ArrowDown' ? 1 : -1))); focus(g); groupEls[g].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
   else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { if (P.g != null) seek(P.g, now() + (e.key === 'ArrowLeft' ? -2 : 2)); }
 });
-draw();
+window.addEventListener('resize', draw);
+// Light up the group in view in the nav as you scroll.
+if ('IntersectionObserver' in window && D.groups.length > 1) {
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting && !P.playing) $$('nav a').forEach(a => a.classList.toggle('on', +a.dataset.g === +e.target.dataset.g)); }), { rootMargin: '-30% 0px -60% 0px' });
+  groupEls.forEach(el => io.observe(el));
+}
+applyTheme();
 })();
 </script>
 </body>
