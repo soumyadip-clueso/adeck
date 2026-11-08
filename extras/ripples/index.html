@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ripples</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: crosshair; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../../assets/ripples.js"></script>
+<script>
+  // ?ink=ffffff&paper=000000&fps=30 tune it; the wallpaper app pokes it with the cursor.
+  const q = new URLSearchParams(location.search);
+  const rgb = h => h && /^[0-9a-f]{6}$/i.test(h) ? [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255) : null;
+  window.ripples = Ripples(document.getElementById('c'), {
+    ink: rgb(q.get('ink')) || [1, 1, 1], paper: rgb(q.get('paper')) || [0, 0, 0],
+    fps: +(q.get('fps') || 60), ambient: q.get('ambient') !== '0',
+  });
+  document.body.style.background = '#' + (q.get('paper') || '000000');
+  const at = e => [e.clientX / innerWidth, e.clientY / innerHeight];
+  addEventListener('pointermove', e => ripples && ripples.poke(...at(e), false));
+  addEventListener('pointerdown', e => ripples && ripples.poke(...at(e), true));
+  // Open on water already moving: two sources, run ahead.
+  if (ripples) { ripples.drop(0.38, 0.55, 1.6, 3); ripples.drop(0.62, 0.45, 1.2, 2.5); ripples.advance(+(q.get('warm') || 260)); }
+</script>
+</body>
+</html>

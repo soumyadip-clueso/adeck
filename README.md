@@ -93,6 +93,19 @@ audio = "bundle"                           # audio inside the page, or "s3":
 # bucket = "…"; prefix = "shares"; profile = "…"; region = "…"; public_url = "https://…"
 ```
 
+## Ripples
+
+A ripple tank on the GPU (`assets/ripples.js`): a 2D wave equation with reflecting walls, drawn as
+stippled grains, so wavefronts show as thin, shimmering rings that cross and interfere.
+
+- **Shared pages** have it behind the page (toggle: Ripples). The sound playing drives it: onsets drop
+  rings from the row or pad that's playing. It's off by default for readers who prefer reduced motion.
+- **Live wallpaper**: `scripts/install-wallpaper` builds `~/Applications/Ripples.app`, which puts it on
+  the desktop of every screen, under your icons. The cursor stirs the water and a click drops a stone.
+  It pauses behind full-screen apps and while the screens sleep, and runs at 30 fps. Use the menu bar
+  item to pause or quit. `--login` starts it at login; `--remove` uninstalls it.
+- **In a browser**: open `extras/ripples/index.html` (`?ink=ffffff&paper=000000&fps=60&ambient=0`).
+
 ## Config
 
 `~/.config/adeck/config.toml`. Everything is optional; without it adeck opens any path it's given.

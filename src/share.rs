@@ -18,6 +18,7 @@ use serde_json::Value;
 use crate::config::{self, ShareCfg};
 
 const PAGE: &str = include_str!("../assets/share.html");
+const RIPPLES: &str = include_str!("../assets/ripples.js");
 
 /// One published page.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -107,7 +108,7 @@ pub fn publish(x: Export, cfg: &ShareCfg, aws: &str) -> Result<Share, String> {
     let base = s3_base.as_ref().map_or_else(|| "audio/".to_owned(), |(_, url)| url.clone());
     rewrite_srcs(&mut page, &names, &base);
     let json = serde_json::to_string(&page).map_err(|e| e.to_string())?.replace("</", "<\\/");
-    let html = PAGE.replace("__TITLE__", &html_escape(&x.title)).replace("/*__DATA__*/null", &json);
+    let html = PAGE.replace("__TITLE__", &html_escape(&x.title)).replace("/*__DATA__*/null", &json).replace("/*__RIPPLES__*/", &RIPPLES.replace("</", "<\\/"));
     std::fs::write(dir.join("index.html"), html).map_err(|e| e.to_string())?;
 
     let out = run(&command, &["publish", &dir.display().to_string(), &slug, &x.title])?;
