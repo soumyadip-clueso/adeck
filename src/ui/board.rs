@@ -14,7 +14,6 @@ use crate::ui::{px, widgets};
 
 const TILE_MIN: f32 = 168.0;
 const GAP: f32 = 10.0;
-const BANDS: [&str; 5] = ["sub", "low", "lowmid", "mid", "presence"];
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     let Some(b) = t.board() else {
@@ -340,7 +339,7 @@ pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
             text("The numbers and what made it show after you pick.").font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).wrap(),
         ));
     }
-    d = d.child(analysis(s, g, mem, e, width, k)).child(details(s, t, mem, e, width, k));
+    d = d.child(details(s, t, mem, e, width, k));
     if let Some(dec) = decisions(s, t, mem, k) {
         d = d.child(dec);
     }
@@ -348,106 +347,6 @@ pub fn detail(s: &App, t: &Tab, g: &Group, width: f32, k: &Kit) -> El {
         d = d.child(more(s, t, g, width, k));
     }
     d
-}
-
-/// The measurements a member is shown with: its own, else earshot's.
-fn measure_of<'a>(mem: &'a Member, e: Option<&'a Entry>) -> Option<&'a Value> {
-    mem.measure.as_ref().or_else(|| e.and_then(|e| e.earshot.get("measure")))
-}
-
-/// Bands, stereo width and tail against the group's target: one row each, in columns.
-fn analysis(s: &App, g: &Group, mem: &Member, e: Option<&Entry>, width: f32, _k: &Kit) -> El {
-    let legend = row()
-        .gap(8.0)
-        .child(text("VALUE").font(px::pixel(9.0)).color(px::OFF).w(VALUE_W).align(rune::Align::End))
-        .child(text("OFF BY").font(px::pixel(9.0)).color(px::OFF).w(OFF_W).align(rune::Align::End));
-    let Some(m) = measure_of(mem, e) else {
-        let busy = e.is_some_and(|e| e.earshot_busy.contains("measure"));
-        let msg = if busy {
-            "Measuring…"
-        } else if crate::derive::on_path(&s.cfg.earshot) {
-            "Not measured yet."
-        } else {
-            "No measurements: earshot isn't installed, and the board didn't include any."
-        };
-        return px::section("analysis", "Against the target", None, text(msg).font(rune::TextStyle::new(13.0, 400.0)).color(px::FAINT).wrap());
-    };
-    let target = g.target().unwrap_or_default();
-    let tb = target.get("bands_db").and_then(Value::as_object);
-    let mut rows = col().w_full().gap(9.0);
-    if let Some(bands) = m.get("bands_db").and_then(Value::as_object) {
-        for b in BANDS {
-            let Some(v) = bands.get(b).and_then(Value::as_f64) else { continue };
-            let want = tb.and_then(|t| t.get(b)).and_then(Value::as_f64);
-            rows = rows.child(meter(b, "dB", v, want, (-60.0, 0.0), 1, (3.0, 6.0), width));
-        }
-    }
-    if let Some(v) = m.get("correlation").and_then(Value::as_f64) {
-        let want = target.get("correlation").and_then(Value::as_f64);
-        rows = rows.child(meter("width", "", v, want, (-1.0, 1.0), 2, (0.15, 0.35), width).help("Stereo correlation: 1 is mono, 0 wide, below 0 out of phase"));
-    }
-    for (key, label) in [("decay_ms", "tail"), ("attack_ms", "attack")] {
-        if let Some(v) = m.get(key).and_then(Value::as_f64) {
-            let want = target.get(key).and_then(Value::as_f64);
-            let hi = v.max(want.unwrap_or(0.0)) * 1.25 + 1.0;
-            let tol = want.map_or(f64::MAX, |w| w * 0.3);
-            rows = rows.child(meter(label, "ms", v, want, (0.0, hi), 0, (tol, tol * 2.0), width));
-        }
-    }
-    if let Some(v) = m.get("lufs").and_then(Value::as_f64) {
-        let want = target.get("lufs").and_then(Value::as_f64);
-        rows = rows.child(meter("lufs", "", v, want, (-40.0, 0.0), 1, (2.0, 4.0), width));
-    }
-    px::section("analysis", "Against the target", Some(legend), rows)
-}
-
-const NAME_W: f32 = 64.0;
-const VALUE_W: f32 = 58.0;
-const OFF_W: f32 = 50.0;
-
-/// One row in columns: the name, LED segments for the value with the target lit as a tick, the
-/// value, and how far off it is, coloured by how much that matters.
-#[allow(clippy::too_many_arguments)]
-fn meter(name: &str, unit: &str, v: f64, want: Option<f64>, (lo, hi): (f64, f64), places: usize, (ok, near): (f64, f64), width: f32) -> El {
-    let bar_w = (width - NAME_W - VALUE_W - OFF_W - 24.0).max(48.0);
-    let segs = ((bar_w / 5.0) as usize).clamp(12, 28);
-    let frac = |x: f64| ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
-    let off = want.map(|w| v - w);
-    let tone = match off.map(f64::abs) {
-        Some(d) if d <= ok => px::GOOD,
-        Some(d) if d <= near => px::CLOSE,
-        Some(_) => px::BAD,
-        None => px::SOFT,
-    };
-    let lit = (frac(v) * segs as f64).round() as usize;
-    let at = want.map(|w| ((frac(w) * segs as f64) as usize).min(segs - 1));
-    let mut bar = row().w(bar_w).h(14.0).gap(2.0).center_y();
-    for i in 0..segs {
-        let (ink, h) = if Some(i) == at {
-            (px::LED, 14.0)
-        } else if i < lit {
-            (tone, 8.0)
-        } else {
-            (px::GRILLE_ON, 8.0)
-        };
-        bar = bar.child(el().grow(1.0).w(0.0).h(h).fill(ink));
-    }
-    let num = |x: f64| format!("{x:.places$}");
-    let shown = if unit == "ms" { format!("{}MS", num(v)) } else { num(v) };
-    let delta = off.map_or_else(String::new, |d| format!("{}{}", if d >= 0.0 { "+" } else { "−" }, num(d.abs())));
-    let help = match want {
-        Some(w) => format!("{name}: {} {unit} · target {} {unit}", num(v), num(w)),
-        None => format!("{name}: {} {unit} · no target", num(v)),
-    };
-    row()
-        .w(width)
-        .gap(8.0)
-        .center_y()
-        .help(help)
-        .child(text(name.to_uppercase()).font(px::pixel(10.0)).color(px::FAINT).w(NAME_W).truncate())
-        .child(bar)
-        .child(text(shown).font(px::pixel(11.0)).color(px::SOFT).w(VALUE_W).align(rune::Align::End))
-        .child(text(delta).font(px::pixel(11.0)).color(tone).w(OFF_W).align(rune::Align::End))
 }
 
 /// What made the file: the prompt, model, seed and chain (every field when opened), its scores

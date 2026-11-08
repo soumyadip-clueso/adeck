@@ -311,8 +311,7 @@ fn board_groups() -> Value {
         "label": {"type": "string"},
         "numbers": {"type": "object", "description": "Your scores, shown in this order: {\"vibe\": 1.05, \"shape\": 0.51}."},
         "chip": chip,
-        "meta": {"type": "object", "description": "prompt, model, seed, chain… shown under Details."},
-        "measure": {"type": "object", "description": "earshot measure-shaped numbers (bands_db, correlation, decay_ms); adeck runs earshot when absent."}
+        "meta": {"type": "object", "description": "prompt, model, seed, chain… shown under Details."}
     }, "required": ["item"]});
     json!({"type": "array", "items": {"type": "object", "properties": {
         "key": {"type": "string"},
@@ -320,7 +319,6 @@ fn board_groups() -> Value {
         "subtitle": {"type": "string"},
         "sort": {"type": "number", "description": "Bigger first, e.g. search count."},
         "chip": chip,
-        "target": {"type": "object", "description": "What the members should measure like: bands_db {sub, low, lowmid, mid, presence}, correlation, decay_ms, attack_ms, lufs. target_ prefixes are dropped."},
         "members": {"type": "array", "items": member},
         "more": {"type": "array", "items": member, "description": "The rest, best first, folded."},
         "note": {"type": "string"}

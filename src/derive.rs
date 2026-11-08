@@ -423,15 +423,6 @@ pub fn read_png(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
     Some((w, h, img.into_raw()))
 }
 
-/// Whether a program can be run: a path that exists, or a name found on `PATH`.
-pub fn on_path(bin: &str) -> bool {
-    let p = Path::new(bin);
-    if p.components().count() > 1 {
-        return p.is_file();
-    }
-    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(bin).is_file()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -356,9 +356,10 @@ mod tests {
         // Sorted by searches: whoosh-soft (846) first, so it's in focus and its members (and rest) play.
         assert_eq!(t.spec.group.as_deref(), Some("whoosh-soft"));
         assert_eq!(t.spec.items.len(), 4);
-        for key in ["group-whoosh-soft", "group-ui-click", "tile-whoosh-soft-0", "bwave", "bspec", "analysis", "decide"] {
+        for key in ["group-whoosh-soft", "group-ui-click", "tile-whoosh-soft-0", "bwave", "bspec", "decide"] {
             assert!(rt.find(key).is_some(), "{key}");
         }
+        assert!(rt.find("analysis").is_none(), "the target meters are gone");
         rt.state.board_play("ui-click", 0);
         let t = rt.state.current().unwrap();
         assert_eq!(t.spec.group.as_deref(), Some("ui-click"));

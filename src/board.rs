@@ -72,11 +72,6 @@ impl Group {
     pub fn playable(&self) -> Vec<&Member> {
         self.members.iter().chain(self.more.iter()).collect()
     }
-    /// The target with `target_` dropped from its keys, so a profile's targets drop straight in.
-    pub fn target(&self) -> Option<Map<String, Value>> {
-        let o = self.target.as_ref()?.as_object()?;
-        Some(o.iter().map(|(k, v)| (k.strip_prefix("target_").unwrap_or(k).to_owned(), v.clone())).collect())
-    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -304,14 +299,6 @@ mod tests {
         };
         assert_eq!(b.sorted().iter().map(|g| g.key.as_str()).collect::<Vec<_>>(), ["y", "x", "z"]);
         assert_eq!(b.tally(), vec![("good".to_owned(), 1), ("close".to_owned(), 2)]);
-    }
-
-    #[test]
-    fn a_profile_target_drops_in_without_its_prefix() {
-        let g: Group = serde_json::from_value(json!({"key": "pop", "target": {"target_decay_ms": 54.0, "target_bands_db": {"sub": -12.0}, "bed": false}})).unwrap();
-        let t = g.target().unwrap();
-        assert_eq!(t["decay_ms"], json!(54.0));
-        assert!(t.contains_key("bands_db") && t.contains_key("bed"));
     }
 
     #[test]

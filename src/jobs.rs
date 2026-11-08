@@ -204,9 +204,6 @@ pub struct Job {
     /// Everything the job did, oldest first.
     pub log: Vec<LogLine>,
     pub started: Instant,
-    /// Background housekeeping (measuring a group for the pane): once it succeeds its row
-    /// clears itself after a few seconds. Failures stay until you dismiss them.
-    pub quiet: bool,
     cancel: CancelToken,
 }
 
@@ -368,7 +365,6 @@ impl Jobs {
             phase: Phase::Running,
             log: Vec::new(),
             started,
-            quiet: false,
             cancel: cancel.clone(),
         });
         self.note(id, Level::Info, format!("Started: {title}"));
@@ -395,19 +391,7 @@ impl Jobs {
     pub fn stage(&mut self, kind: JobKind, title: &str, detail: &str, done: u64, total: Option<u64>, phase: Phase) -> JobId {
         let id = JobId(self.next);
         self.next += 1;
-        let job = Job {
-            id,
-            kind,
-            title: title.into(),
-            detail: detail.into(),
-            done,
-            total,
-            phase,
-            log: Vec::new(),
-            started: Instant::now(),
-            quiet: false,
-            cancel: CancelToken::default(),
-        };
+        let job = Job { id, kind, title: title.into(), detail: detail.into(), done, total, phase, log: Vec::new(), started: Instant::now(), cancel: CancelToken::default() };
         self.list.push(job);
         id
     }
@@ -492,32 +476,6 @@ impl Jobs {
             }
             j.phase = Phase::Done { outcome, at: now };
         }
-    }
-
-    /// Like `spawn`, for background housekeeping: it clears itself a few seconds after it
-    /// succeeds.
-    pub fn spawn_quiet<F>(&mut self, kind: JobKind, title: impl Into<String>, work: F) -> JobId
-    where
-        F: FnOnce(&mut Reporter) -> Outcome + Send + 'static,
-    {
-        let id = self.spawn(kind, title, work);
-        if let Some(j) = self.list.iter_mut().find(|j| j.id == id) {
-            j.quiet = true;
-        }
-        id
-    }
-
-    /// Drops quiet jobs that succeeded at least `after` seconds ago. Returns whether any went,
-    /// and how long until the next one is due.
-    pub fn expire_quiet(&mut self, now: f64, after: f64) -> (bool, Option<f64>) {
-        let due = |j: &Job| match j.phase {
-            Phase::Done { outcome: Outcome::Completed(_), at } if j.quiet => Some(at + after - now),
-            _ => None,
-        };
-        let before = self.list.len();
-        self.list.retain(|j| due(j).is_none_or(|left| left > 0.0));
-        let next = self.list.iter().filter_map(due).fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.min(x))));
-        (self.list.len() != before, next)
     }
 
     /// Removes every finished job's row.
@@ -635,27 +593,6 @@ mod tests {
         assert!(jobs.get(running).is_some(), "clearing never touches a running job");
         jobs.cancel(running);
         wait(&mut jobs, |j| !j.get(running).unwrap().is_active());
-    }
-
-    #[test]
-    fn quiet_jobs_clear_themselves_once_they_succeed_but_failures_stay() {
-        let mut jobs = Jobs::default();
-        let ok = jobs.spawn_quiet(JobKind::Earshot, "Measuring 3 takes", |_| Outcome::Completed("Measured 3 takes".into()));
-        let bad = jobs.spawn_quiet(JobKind::Earshot, "Measuring 2 takes", |_| Outcome::Failed("no earshot".into()));
-        let loud = jobs.spawn(JobKind::Fetch, "Downloading", |_| Outcome::Completed("Downloaded".into()));
-        let mut t = 0.0;
-        while jobs.list().iter().any(Job::is_active) {
-            t += 0.01;
-            jobs.drain(t);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let (gone, next) = jobs.expire_quiet(t + 1.0, 4.0);
-        assert!(!gone && next.is_some_and(|n| n > 2.0), "too early: nothing goes yet");
-        let (gone, next) = jobs.expire_quiet(t + 5.0, 4.0);
-        assert!(gone && next.is_none());
-        assert!(jobs.get(ok).is_none(), "a quiet success clears itself");
-        assert!(jobs.get(bad).is_some(), "a failure stays until you dismiss it");
-        assert!(jobs.get(loud).is_some(), "a job you started stays");
     }
 
     #[test]

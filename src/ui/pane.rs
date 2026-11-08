@@ -17,7 +17,7 @@ pub fn sections(t: &Tab) -> &'static [&'static str] {
     match t.spec.kind {
         TabKind::Single => &["META", "EARSHOT", "NOTE"],
         TabKind::Compare => &["DIFF", "META", "EARSHOT", "NOTE"],
-        TabKind::Board => &["TARGET", "NOTE"],
+        TabKind::Board => &["TAKE", "NOTE"],
         TabKind::Run => &["META", "NOTE"],
         TabKind::Render => &["NOTE"],
         TabKind::Diff | TabKind::Shared => &[],
@@ -222,7 +222,7 @@ fn build(s: &App, t: &Tab, w: f32, k: &Kit) -> El {
         "EARSHOT" => focus_entry(s, t).map_or_else(|| hint("Nothing selected."), |e| widgets::earshot_panel(s, e, k)),
         "NOTE" => note(s, t, k),
         "DIFF" => diff(s, t),
-        "TARGET" => match t.focused() {
+        "TAKE" => match t.focused() {
             Some(g) => board::detail(s, t, g, inner, k),
             None => hint("Play a sound to see it against the target."),
         },

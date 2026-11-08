@@ -323,7 +323,6 @@ pub struct App {
     pub scores: HashMap<String, i64>,
     /// The latest keep/drop/move on each item.
     pub decisions: HashMap<String, String>,
-    earshot_ok: bool,
     waker: Option<Waker>,
     tx: Sender<Event>,
     rx: Receiver<Event>,
@@ -381,7 +380,6 @@ impl App {
         let rows = feedback.read_all();
         let scores = feedback::latest_scores(&rows);
         let decisions = board::decisions(&rows);
-        let earshot_ok = derive::on_path(&cfg.earshot);
         let mut jobs = Jobs::default();
         if let Some(p) = crate::jobs::log_path() {
             jobs.log_to(&p);
@@ -399,7 +397,6 @@ impl App {
             feedback,
             scores,
             decisions,
-            earshot_ok,
             waker: None,
             tx,
             rx,
@@ -1027,59 +1024,7 @@ impl App {
                 self.trim_pixels();
             }
         }
-        self.want_measures();
         self.dirty = true;
-    }
-
-    /// earshot `measure` for the focused group's files that have no measurements yet, for the
-    /// band, width and tail views. One job for the whole group, which clears itself when done.
-    fn want_measures(&mut self) {
-        if !self.earshot_ok || self.headless {
-            return;
-        }
-        let Some(t) = self.current() else { return };
-        let Some(g) = t.focused() else { return };
-        let group = g.title().to_owned();
-        let want: Vec<String> = g.playable().iter().filter(|m| m.measure.is_none()).map(|m| m.item.clone()).collect();
-        let mut todo = Vec::new();
-        for id in want {
-            let Some(e) = self.items.get_mut(&id) else { continue };
-            if e.earshot.contains_key(Earshot::Measure.name()) || !e.earshot_busy.insert(Earshot::Measure.name()) {
-                continue;
-            }
-            todo.push((id, e.item.path.clone(), e.item.name.clone()));
-        }
-        if todo.is_empty() {
-            return;
-        }
-        let bin = self.cfg.earshot.clone();
-        let tx = self.tx.clone();
-        let n = todo.len();
-        let title = format!("Measuring {n} take{} · {group}", if n == 1 { "" } else { "s" });
-        self.jobs.spawn_quiet(JobKind::Earshot, title, move |rep| {
-            let mut failed: Vec<String> = Vec::new();
-            for (i, (id, path, name)) in todo.into_iter().enumerate() {
-                if rep.is_cancelled() {
-                    // What's left can be measured next time the group is focused.
-                    let _ = tx.send(Event::Earshot { id, cmd: Earshot::Measure, result: Err("stopped".into()) });
-                    continue;
-                }
-                rep.progress(i as u64, Some(n as u64), name.clone());
-                let result = derive::earshot(&bin, &path, Earshot::Measure);
-                if let Err(e) = &result {
-                    rep.warn(format!("{name}: {e}"));
-                    failed.push(name);
-                }
-                let _ = tx.send(Event::Earshot { id, cmd: Earshot::Measure, result });
-            }
-            if rep.is_cancelled() {
-                Outcome::Stopped(format!("Stopped measuring {group}"))
-            } else if failed.is_empty() {
-                Outcome::Completed(format!("Measured {n} take{} · {group}", if n == 1 { "" } else { "s" }))
-            } else {
-                Outcome::Failed(format!("Couldn't measure {} of {n} in {group}: {}", failed.len(), failed.join(", ")))
-            }
-        });
     }
 
     pub fn focus_group(&mut self, key: &str) {
@@ -1785,11 +1730,6 @@ impl App {
         let mut changed = self.drain();
         let (_, jobs_changed) = self.jobs.drain(clock);
         changed |= jobs_changed;
-        let (expired, next) = self.jobs.expire_quiet(clock, 4.0);
-        changed |= expired;
-        if let Some(left) = next {
-            tx.wake_after(std::time::Duration::from_secs_f64(left.max(0.05)));
-        }
         changed |= self.mixer.tick();
         if self.mixer.take_lost() {
             // The output went away or changed: reload onto the new one, at the same spot.
@@ -1880,7 +1820,6 @@ impl App {
                         }
                         if self.active == Some(tab) {
                             self.sync_mixer();
-                            self.want_measures();
                         }
                     }
                     Err(e) => {
