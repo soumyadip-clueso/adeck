@@ -1,8 +1,9 @@
 //! The Dock icon is a 9×9 dot screen. At rest it shows the adeck mark, a lowercase a in dots.
 //! While something is happening (the agent calling tools, analysis running, sound playing, or
 //! the agent waiting on your verdict) the a dissolves into a live meter that wanders between a
-//! waveform, a spectrum and a scope, then settles back into the a. Frames are simulated, not
-//! looped: one costs well under a millisecond to draw and encode at 256 px.
+//! waveform, a spectrum and a scope, then settles back into the a. The meter is simulated once
+//! into a reel of 40 frames (4 to dissolve, 36 of meter) the first time it's needed; after that
+//! animating only swaps cached images.
 
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
@@ -19,12 +20,13 @@ pub enum Mood {
 
 const N: usize = 9;
 const DIM: f32 = 0.12;
-const FPS: f32 = 12.0;
-/// Live frames are drawn at Dock-tile size; macOS spends far more resampling a bigger image
-/// than we spend drawing it.
+const FPS: f32 = 10.0;
+/// Reel frames are drawn at Dock-tile size; macOS spends more resampling a bigger image.
 const LIVE_PX: u32 = 128;
-/// Seconds for the mark to dissolve into the meter, or settle back.
-const FADE: f32 = 0.45;
+/// Frames for the mark to dissolve into the meter (played backwards to settle).
+const FADES: usize = 4;
+/// Frames of meter: a third each on the wave, spectrum and scope, played back and forth.
+const REEL: usize = 36;
 // The tile at 1024: a flat rounded square.
 const TILE: (f32, f32, f32) = (100.0, 924.0, 178.0);
 const INK: (u8, u8, u8) = (0xf2, 0xf2, 0xf2);
@@ -222,33 +224,86 @@ fn blend(a: &[[f32; N]; N], b: &[[f32; N]; N], k: f32) -> [[f32; N]; N] {
     g
 }
 
-/// Drives the Dock icon: the mark at rest; the live meter at 12 fps while something is
-/// happening, cross-faded in and out of the mark. It only touches AppKit from the main thread,
-/// so tests and headless renders leave the Dock alone.
+/// Every frame the Dock can show while busy: the dissolve, then the meter reel.
+fn frames() -> Vec<[[f32; N]; N]> {
+    let dt = 1.0 / FPS;
+    let mut m = Meter { next: f32::MAX, ..Meter::default() };
+    for _ in 0..FPS as usize {
+        m.step(dt, 0.85, 1.0, true);
+    }
+    let reel: Vec<_> = (0..REEL)
+        .map(|f| {
+            m.mode = f * 3 / REEL;
+            m.step(dt, 0.85, 1.0, true);
+            m.grid()
+        })
+        .collect();
+    let fades = (0..FADES).map(|k| blend(&mark(), &reel[0], (k + 1) as f32 / (FADES + 1) as f32));
+    fades.chain(reel.iter().copied()).collect()
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+enum Phase {
+    #[default]
+    Rest,
+    /// Dissolving into the meter; the fade frame shown.
+    In(usize),
+    /// Playing the reel back and forth.
+    Run { pos: usize, fwd: bool },
+    /// Settling back into the mark.
+    Out(usize),
+}
+
+/// Drives the Dock icon: the mark at rest; the reel at 10 fps while something is happening.
+/// It only touches AppKit from the main thread, so tests and headless renders leave the Dock
+/// alone.
 #[derive(Default)]
 pub struct Dock {
-    meter: Meter,
-    /// 0 shows the mark, 1 the meter.
-    mix: f32,
+    phase: Phase,
+    tick: u32,
+    images: Vec<objc2::rc::Retained<objc2_app_kit::NSImage>>,
     shown: bool,
     last: Option<std::time::Instant>,
 }
 
 impl Dock {
-    /// Advances one frame toward `mood` and returns the grid to show, or None once at rest.
-    fn advance(&mut self, mood: Mood, dt: f32) -> Option<[[f32; N]; N]> {
-        if mood == Mood::Idle && self.mix == 0.0 {
-            return None;
-        }
-        let dir = if mood == Mood::Idle { -1.0 } else { 1.0 };
-        self.mix = (self.mix + dir * dt / FADE).clamp(0.0, 1.0);
-        let (energy, pace, cycle) = match mood {
-            Mood::Waiting => (0.35, 0.45, false),
-            Mood::Playing => (1.0, 1.0, true),
-            _ => (0.85, 1.0, true),
+    /// Moves one frame toward `mood`; the frame to show, or None once at rest.
+    fn advance(&mut self, mood: Mood) -> Option<usize> {
+        let idle = mood == Mood::Idle;
+        self.tick = self.tick.wrapping_add(1);
+        let (phase, frame) = match self.phase {
+            Phase::Rest if idle => return None,
+            Phase::Rest => (Phase::In(0), 0),
+            Phase::In(k) | Phase::Out(k) if idle => match k.checked_sub(1) {
+                Some(k) => (Phase::Out(k), k),
+                None => {
+                    self.phase = Phase::Rest;
+                    return None;
+                }
+            },
+            Phase::In(k) | Phase::Out(k) if k + 1 < FADES => (Phase::In(k + 1), k + 1),
+            Phase::In(_) | Phase::Out(_) => (Phase::Run { pos: 0, fwd: true }, FADES),
+            // Heading home: run back to the reel's first frame quickly, then dissolve.
+            Phase::Run { pos: 0, .. } if idle => (Phase::Out(FADES - 1), FADES - 1),
+            Phase::Run { pos, .. } if idle => {
+                let pos = pos.saturating_sub(3);
+                (Phase::Run { pos, fwd: false }, FADES + pos)
+            }
+            Phase::Run { pos, fwd } => {
+                // Waiting on a verdict: just the wave, at half speed.
+                let (end, hold) = if mood == Mood::Waiting { (REEL / 3, self.tick % 2 == 1) } else { (REEL, false) };
+                let (pos, fwd) = match (hold, fwd) {
+                    (true, _) => (pos, fwd),
+                    _ if pos + 1 >= end => (pos.min(end) - 1, false),
+                    (_, true) => (pos + 1, true),
+                    (_, false) if pos == 0 => (1, true),
+                    (_, false) => (pos - 1, false),
+                };
+                (Phase::Run { pos, fwd }, FADES + pos)
+            }
         };
-        self.meter.step(dt, energy, pace, cycle);
-        Some(blend(&mark(), &self.meter.grid(), self.mix))
+        self.phase = phase;
+        Some(frame)
     }
 
     /// Shows `mood`; returns when to come back for the next frame (None once at rest).
@@ -261,7 +316,7 @@ impl Dock {
         if self.last.is_some() && dt + 0.002 < step {
             return Some(std::time::Duration::from_secs_f32(step - dt));
         }
-        let Some(g) = self.advance(mood, dt.min(0.25)) else {
+        let Some(f) = self.advance(mood) else {
             self.last = None;
             if !self.shown {
                 self.shown = true;
@@ -271,9 +326,12 @@ impl Dock {
             }
             return None;
         };
+        if self.images.is_empty() {
+            self.images = frames().iter().filter_map(|g| image(&draw_grid(g, LIVE_PX))).collect();
+        }
         self.shown = false;
-        if let Some(img) = image(&draw_grid(&g, LIVE_PX)) {
-            unsafe { app.setApplicationIconImage(Some(&img)) };
+        if let Some(img) = self.images.get(f) {
+            unsafe { app.setApplicationIconImage(Some(img)) };
         }
         self.last = Some(now);
         Some(std::time::Duration::from_secs_f32(step))
@@ -289,7 +347,7 @@ fn image(pm: &Pixmap) -> Option<objc2::rc::Retained<objc2_app_kit::NSImage>> {
 
 /// `adeck --dock-icon <png> [size]` writes the still mark; `scripts/install` builds the app icon
 /// from it.
-/// `adeck --dock-live <dir> [frames]` records the Dock at 12 fps: a second at rest, at work, then
+/// `adeck --dock-live <dir> [frames]` records the Dock at 10 fps: a second at rest, at work, then
 /// two seconds settling back.
 pub fn dump(args: &[String]) -> Option<std::io::Result<()>> {
     let at = |flag: &str| args.iter().position(|a| a == flag);
@@ -301,13 +359,14 @@ pub fn dump(args: &[String]) -> Option<std::io::Result<()>> {
     }
     let i = at("--dock-live")?;
     let dir = std::path::Path::new(args.get(i + 1).map_or("dock-live", String::as_str));
-    let frames: usize = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(240);
+    let count: usize = args.get(i + 2).and_then(|s| s.parse().ok()).unwrap_or(240);
     Some((|| {
         std::fs::create_dir_all(dir)?;
+        let all = frames();
         let mut d = Dock::default();
-        for f in 0..frames {
-            let mood = if f >= 12 && f + 24 < frames { Mood::Working } else { Mood::Idle };
-            let g = d.advance(mood, 1.0 / FPS).unwrap_or_else(mark);
+        for f in 0..count {
+            let mood = if f >= 10 && f + 20 < count { Mood::Working } else { Mood::Idle };
+            let g = d.advance(mood).map_or_else(mark, |i| all[i]);
             std::fs::write(dir.join(format!("{f:04}.png")), png(draw_grid(&g, 128))?)?;
         }
         Ok(())
@@ -336,16 +395,28 @@ mod tests {
     }
 
     #[test]
-    fn the_dock_settles_back_into_the_mark() {
+    fn the_dock_plays_a_small_reel_that_never_jumps_and_settles_into_the_mark() {
+        let all = frames();
+        assert_eq!(all.len(), FADES + REEL);
+        let jump = |a: &[[f32; N]; N], b: &[[f32; N]; N]| a.iter().flatten().zip(b.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
         let mut d = Dock::default();
-        for _ in 0..24 {
-            assert!(d.advance(Mood::Working, 1.0 / FPS).is_some());
+        let mut prev = mark();
+        let mut seen = vec![false; all.len()];
+        for t in 0..400 {
+            let mood = if t < 300 { Mood::Working } else { Mood::Idle };
+            let Some(f) = d.advance(mood) else {
+                assert!(t > 300, "came to rest while working");
+                assert!(jump(&prev, &mark()) < 0.5, "the last frame before rest isn't near the mark");
+                assert!(seen.iter().all(|&s| s), "some frames never played");
+                return;
+            };
+            seen[f] = true;
+            // Settling skips frames to get home fast; otherwise frames follow on smoothly.
+            if t < 300 {
+                assert!(jump(&prev, &all[f]) < 0.95, "frame {t} jumped");
+            }
+            prev = all[f];
         }
-        assert_eq!(d.mix, 1.0);
-        let mut last = None;
-        while let Some(g) = d.advance(Mood::Idle, 1.0 / FPS) {
-            last = Some(g);
-        }
-        assert_eq!(last, Some(mark()), "the last frame before rest isn't the mark");
+        panic!("never came back to rest");
     }
 }
