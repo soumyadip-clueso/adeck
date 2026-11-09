@@ -54,7 +54,7 @@ Every score, pick, note and keep / drop / move is one JSON line in `~/.config/ad
 ## Screenshots and sharing
 
 - **Screenshot** (⌘⇧S, the camera in the footer, or `screenshot_tab` with `pretty: true`): the tab at 2x on a gradient with rounded corners and a shadow, saved to `~/Pictures/adeck` and copied to the clipboard.
-- **Share** (⌘⇧E, the share icon in the footer, or `share_tab`): the tab becomes a web page with gapless A/B players, waveforms, numbers and details, and the link is copied. Files from your reference pack are never uploaded; they show as local-only.
+- **Share** (⌘⇧E, the Share button at the top right, the share icon in the footer, or `share_tab`): the tab becomes a web page with gapless A/B players, waveforms, numbers and details, and the link is copied. Files from your reference pack are never uploaded; they show as local-only.
 - **Take down** (the Shared tab, or `unshare`): deletes the page and its audio. A page taken down elsewhere shows as down, and its uploaded audio is cleared.
 
 Sharing calls a publisher program you name in the config, so any host works:

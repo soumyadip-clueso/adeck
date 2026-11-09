@@ -194,10 +194,8 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     }
     let mut thumb = el().w_full().h(60.0).radius(3.0).fill(widgets::screen()).clip_rounded(3.0).instant_changes().inert();
     if let Some(e) = e {
-        let px = if t.zoom_sound && e.sound.is_some() { &e.zoom } else { &e.thumb };
-        if e.analysis.is_some() {
-            thumb = thumb.child(el().absolute(0.0, 0.0).w_full().h_full().pixels(px));
-        }
+        let range = if t.zoom_sound { e.sound } else { None };
+        thumb = thumb.child(widgets::tile_picture(e, range, w - 20.0, 60.0));
         if active && let Some((a, b)) = view_of(t, e) {
             let pos = widgets::playhead(s, t);
             if pos >= a && pos <= b && b > a {

@@ -31,6 +31,7 @@ pub fn kit(_dark: bool) -> &'static Kit {
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let k = kit(cx.system_dark());
+    widgets::set_scale(cx.env().scale);
     let mut layer = Vec::new();
     let titlebar = titlebar(s, cx, k, &mut layer);
     let full_w = cx.layout_size("body").map_or(1280.0, |z| z[0]);
@@ -129,6 +130,37 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         .build_layered(k, layer);
     // The agent's connection only shows when it's down.
     let mut trailing = row().gap(14.0).center_y().pr(4.0);
+    if s.current().is_some_and(|t| matches!(t.spec.kind, TabKind::Single | TabKind::Compare | TabKind::Render | TabKind::Board)) {
+        let share = if s.sharing {
+            row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(9.0).build(k)).child(px::label("Sharing"))
+        } else {
+            row()
+                .gap(6.0)
+                .center_y()
+                .child(rune::icon(&icons::SHARE, 13.0).color(px::SOFT))
+                .child(text("SHARE").font(px::pixel(11.0)).color(px::SOFT))
+        };
+        trailing = trailing.child(
+            row()
+                .key("share-tab")
+                .h(26.0)
+                .px(9.0)
+                .center_y()
+                .radius(4.0)
+                .border(1.0, px::GRILLE)
+                .hover(px::SELECTED)
+                .cursor(rune::Cursor::Pointer)
+                .role("button")
+                .label("Share this tab")
+                .help("Publish this tab as a web page and copy the link · ⌘⇧E")
+                .child(share)
+                .on_press(|s: &mut App| {
+                    if let Err(e) = s.share() {
+                        s.toast = Some((e, true));
+                    }
+                }),
+        );
+    }
     if s.calls.is_none() {
         trailing = trailing.child(px::lamp("MCP OFF", px::BAD).key("mcp-status").help(s.mcp_status.clone()));
     }

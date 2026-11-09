@@ -240,6 +240,9 @@ pub struct Entry {
     pub spec_raw: std::cell::RefCell<Vec<u8>>,
     pub spec_view: Pixels,
     pub spec_key: std::cell::Cell<(u64, u64, u32, u32)>,
+    /// A board tile's waveform at the tile's size on screen, and for which (w, h, range ms).
+    pub tile_px: Pixels,
+    pub tile_key: std::cell::Cell<(u32, u32, u64, u64)>,
 }
 
 impl Entry {
@@ -289,6 +292,8 @@ impl Entry {
             spec_raw: std::cell::RefCell::new(Vec::new()),
             spec_view: Pixels::new(),
             spec_key: std::cell::Cell::new((0, 0, 0, 0)),
+            tile_px: Pixels::new(),
+            tile_key: std::cell::Cell::new((0, 0, 0, 0)),
         };
         for cmd in [Earshot::Describe, Earshot::Measure, Earshot::Critique] {
             if let Some(v) = derive::earshot_cached(&e.item.path, cmd) {
@@ -1994,6 +1999,7 @@ impl App {
                     Ok(a) => {
                         entry.thumb.set(360, 48, crate::ui::widgets::paint_wave(&a.envelope, 360, 48));
                         entry.full.set(false);
+                        entry.tile_key.set((0, 0, 0, 0));
                         let (lo, hi) = board::sound_range(&a.envelope, a.secs, -45.0);
                         entry.sound = Some((lo, hi));
                         let n = a.envelope.len();

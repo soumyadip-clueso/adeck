@@ -12,10 +12,24 @@ pub fn screen() -> Color {
     px::SCREEN
 }
 
-/// Dot pitch, in device pixels, for a picture `h` tall: 8 (4pt at 2x) on strips, smaller on
-/// thumbnails so they still show a shape.
+/// The display's backing scale (2 on a Retina screen), set by the view each frame. Pictures
+/// are painted at their size in points times this, so dots land on whole device pixels.
+static SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x4000_0000); // 2.0
+
+pub fn set_scale(s: f32) {
+    SCALE.store(s.clamp(1.0, 4.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn scale() -> f32 {
+    f32::from_bits(SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Dot pitch, in device pixels, for a picture `h` device pixels tall: 4pt on strips, smaller
+/// on thumbnails so they still show a shape. The same in points on any screen.
 fn cell_for(h: usize) -> usize {
-    (h / 22).clamp(4, 8)
+    let sc = scale();
+    let pt = ((h as f32 / sc / 11.0).floor()).clamp(4.0, 8.0) / 2.0;
+    ((pt * sc).round() as usize).max(2)
 }
 
 /// Lights one dot of a `cell`-pitch grid.
@@ -201,8 +215,9 @@ fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32,
     if a.secs <= 0.0 {
         return el();
     }
-    let w = ((width * 2.0).round() as u32).clamp(64, 6000);
-    let h = ((height * 2.0).round() as u32).clamp(32, 1600);
+    let sc = scale();
+    let w = ((width * sc).round() as u32).clamp(64, 6000);
+    let h = ((height * sc).round() as u32).clamp(32, 1600);
     // Past the file's end the screen stays dark, so draw only the part that exists.
     let own = ((((a.secs.min(hi) - lo) / span) * f64::from(w)).round() as usize).clamp(1, w as usize);
     let key = ((lo * 1000.0) as u64, (hi * 1000.0) as u64, w, h);
@@ -223,6 +238,27 @@ fn picture(e: &Entry, a: &crate::derive::Analysis, lo: f64, hi: f64, width: f32,
     }
     let own_w = (((a.secs.min(hi) - lo) / span) as f32 * width).max(0.0);
     el().absolute(0.0, 0.0).w(own_w).h_full().pixels(pixels).inert()
+}
+
+/// A tile's waveform (just the sound when `range` is set), painted at the tile's own size on
+/// this screen and repainted when that changes, so it's never a small picture stretched.
+pub fn tile_picture(e: &Entry, range: Option<(f64, f64)>, width: f32, height: f32) -> El {
+    let Some(a) = &e.analysis else { return el() };
+    let sc = scale();
+    let w = ((width * sc).round() as u32).clamp(16, 6000);
+    let h = ((height * sc).round() as u32).clamp(8, 1600);
+    let (lo, hi) = range.unwrap_or((0.0, a.secs));
+    let key = (w, h, (lo * 1000.0) as u64, (hi * 1000.0) as u64);
+    if e.tile_key.get() != key {
+        let n = a.envelope.len();
+        let ca = if a.secs > 0.0 { ((lo / a.secs) * n as f64).floor().max(0.0) as usize } else { 0 };
+        let cb = if a.secs > 0.0 { (((hi / a.secs) * n as f64).ceil() as usize).min(n) } else { n };
+        if cb > ca {
+            e.tile_px.set(w, h, paint_wave(&a.envelope[ca..cb], w as usize, h as usize));
+        }
+        e.tile_key.set(key);
+    }
+    el().absolute(0.0, 0.0).w(width).h(height).pixels(&e.tile_px).inert()
 }
 
 /// The loop region and the playhead over a strip.
