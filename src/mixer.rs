@@ -18,6 +18,9 @@ use crate::decode::{self, Pcm};
 
 /// Crossfade length on a switch, in seconds.
 const XFADE: f32 = 0.005;
+/// Grain length for faster-than-1× playback, in seconds: two Hann grains half a grain apart,
+/// each read at 1×, so the pitch stays put while the cursor runs ahead.
+const GRAIN: f32 = 0.04;
 
 type Paths = Vec<(String, std::path::PathBuf)>;
 type Decoded = Result<(Vec<Arc<Vec<f32>>>, u64), String>;
@@ -37,6 +40,7 @@ enum Cmd {
     /// A selection: play stops at its end (unless a loop is set).
     Range(Option<(u64, u64)>),
     Volume(f32),
+    Speed(f32),
 }
 
 struct Shared {
@@ -92,6 +96,8 @@ pub struct Mixer {
     pending: Option<(u64, Paths)>,
     /// Output volume, 0 to 1.5 (linear).
     pub volume: f32,
+    /// Playback speed: 1 or 2.
+    pub speed: f32,
     /// A seek asked for while the files were still decoding, in seconds, applied once they land.
     pending_seek: Option<f64>,
     /// Set by the stream's thread when the output died or the default output changed; the
@@ -132,6 +138,7 @@ impl Default for Mixer {
             waker: None,
             pending: None,
             volume: 1.0,
+            speed: 1.0,
             pending_seek: None,
             stream_dead: None,
             lost: false,
@@ -320,7 +327,7 @@ impl Mixer {
         }
         // Between buffers, carry on at real time, never past one buffer's worth.
         let since = self.shared.base.elapsed().as_nanos() as u64;
-        let ahead = since.saturating_sub(self.shared.stamp.load(Ordering::Acquire)) as f64 / 1e9;
+        let ahead = since.saturating_sub(self.shared.stamp.load(Ordering::Acquire)) as f64 / 1e9 * f64::from(self.speed);
         let rate = f64::from(self.rate);
         let end = self.frames.saturating_sub(1) as f64 / rate;
         let secs = |(a, b): (u64, u64)| (a as f64 / rate, b as f64 / rate);
@@ -448,6 +455,12 @@ impl Mixer {
         self.send(Cmd::Volume(v));
     }
 
+    pub fn set_speed(&mut self, v: f32) {
+        self.speed = v.clamp(0.5, 4.0);
+        let v = self.speed;
+        self.send(Cmd::Speed(v));
+    }
+
     /// True once after the output was lost; the app then reloads onto the new output.
     pub fn take_lost(&mut self) -> bool {
         std::mem::take(&mut self.lost)
@@ -481,6 +494,15 @@ struct State {
     /// Fade in after a seek or start, out before a pause, so nothing clicks.
     master: f32,
     volume: f32,
+    speed: f32,
+    /// The part of a frame the cursor has run past `pos` at a fractional speed.
+    frac: f64,
+    /// Off 1×: two grains as (source start, frames played), a slot past `window` being idle.
+    grains: [(u64, usize); 2],
+    next_grain: usize,
+    /// Frames until the next grain starts.
+    hop_left: usize,
+    window: Vec<f32>,
 }
 
 fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Stream, Sender<Cmd>, u32, Option<cpal::DeviceId>), String> {
@@ -504,6 +526,12 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
         step: 1.0 / (XFADE * rate as f32),
         master: 0.0,
         volume: 1.0,
+        speed: 1.0,
+        frac: 0.0,
+        grains: [(0, usize::MAX); 2],
+        next_grain: 0,
+        hop_left: 0,
+        window: hann(((GRAIN * rate as f32) as usize / 2 * 2).max(2)),
     });
     let sh = shared.clone();
     let fill = move |out: &mut [f32]| {
@@ -528,12 +556,18 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                 Cmd::Seek(f) => {
                     s.pos = f;
                     s.master = 0.0;
+                    s.reset_grains();
                 }
                 Cmd::Active(i) => s.active = i,
                 Cmd::Trims(t) => s.trims = t,
                 Cmd::Loop(l) => s.looping = l,
                 Cmd::Range(r) => s.range = r,
                 Cmd::Volume(v) => s.volume = v,
+                Cmd::Speed(v) => {
+                    s.speed = v;
+                    s.frac = 0.0;
+                    s.reset_grains();
+                }
             }
         }
         let n = s.tracks.len();
@@ -547,7 +581,7 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                 continue;
             }
             let (mut l, mut r) = (0f32, 0f32);
-            let p = s.pos as usize;
+            let (taps, nt) = s.taps();
             for i in 0..n {
                 let target = if i == s.active { 1.0 } else { 0.0 };
                 let g = s.gains[i] + (target - s.gains[i]).clamp(-step, step);
@@ -557,9 +591,11 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                 }
                 let t = &s.tracks[i];
                 let trim = s.trims.get(i).copied().unwrap_or(1.0);
-                if let (Some(a), Some(b)) = (t.get(p * 2), t.get(p * 2 + 1)) {
-                    l += a * g * trim;
-                    r += b * g * trim;
+                for &(p, w) in &taps[..nt] {
+                    if let (Some(a), Some(b)) = (t.get(p * 2), t.get(p * 2 + 1)) {
+                        l += a * g * trim * w;
+                        r += b * g * trim * w;
+                    }
                 }
             }
             let m = s.master * s.volume;
@@ -572,7 +608,14 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                 }
             }
             if s.playing {
-                s.pos += 1;
+                if s.speed == 1.0 {
+                    s.pos += 1;
+                } else {
+                    s.frac += f64::from(s.speed);
+                    let whole = s.frac.floor();
+                    s.frac -= whole;
+                    s.pos += whole as u64;
+                }
                 if let Some((a, b)) = s.looping
                     && s.pos >= b
                 {
@@ -614,6 +657,55 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
     .map_err(|e| e.to_string())?;
     stream.play().map_err(|e| e.to_string())?;
     Ok((stream, tx, rate, id))
+}
+
+/// sin² over `n` frames: two copies half a window apart sum to exactly 1.
+fn hann(n: usize) -> Vec<f32> {
+    (0..n).map(|j| (std::f32::consts::PI * j as f32 / n as f32).sin().powi(2)).collect()
+}
+
+impl State {
+    fn reset_grains(&mut self) {
+        self.grains = [(0, usize::MAX); 2];
+        self.hop_left = 0;
+    }
+
+    /// The source frames this output frame reads, with their weights: just `pos` at 1×, else
+    /// the live grains (which keep to the loop, if there is one).
+    fn taps(&mut self) -> ([(usize, f32); 2], usize) {
+        let mut taps = [(self.pos as usize, 1.0), (0, 0.0)];
+        if self.speed == 1.0 {
+            return (taps, 1);
+        }
+        let n = self.window.len();
+        if self.playing {
+            if self.hop_left == 0 {
+                self.grains[self.next_grain] = (self.pos, 0);
+                self.next_grain ^= 1;
+                self.hop_left = n / 2;
+            }
+            self.hop_left -= 1;
+        }
+        let mut k = 0;
+        for gi in 0..2 {
+            let (start, at) = self.grains[gi];
+            if at >= n {
+                continue;
+            }
+            let mut idx = start + at as u64;
+            if let Some((a, b)) = self.looping.filter(|(a, b)| b > a && start < *b)
+                && idx >= b
+            {
+                idx = a + (idx - b) % (b - a);
+            }
+            taps[k] = (idx as usize, self.window[at]);
+            k += 1;
+            if self.playing {
+                self.grains[gi].1 += 1;
+            }
+        }
+        (taps, k)
+    }
 }
 
 /// The linear trim that brings `lufs` to `target`, capped at +12 dB.
@@ -677,5 +769,58 @@ mod tests {
         assert!((trim_for(Some(-8.0), -14.0) - 0.501).abs() < 0.01);
         assert!((trim_for(Some(-60.0), -14.0) - 3.98).abs() < 0.01);
         assert_eq!(trim_for(None, -14.0), 1.0);
+    }
+
+    fn state(speed: f32) -> State {
+        State {
+            tracks: Vec::new(),
+            gains: Vec::new(),
+            trims: Vec::new(),
+            active: 0,
+            pos: 0,
+            len: 1_000_000,
+            playing: true,
+            looping: None,
+            range: None,
+            step: 1.0,
+            master: 1.0,
+            volume: 1.0,
+            speed,
+            frac: 0.0,
+            grains: [(0, usize::MAX); 2],
+            next_grain: 0,
+            hop_left: 0,
+            window: hann(64),
+        }
+    }
+
+    #[test]
+    fn at_1x_every_frame_reads_just_the_cursor() {
+        let mut s = state(1.0);
+        s.pos = 77;
+        let (t, n) = s.taps();
+        assert_eq!((n, t[0]), (1, (77, 1.0)));
+    }
+
+    #[test]
+    fn at_2x_grains_read_at_1x_and_their_weights_sum_to_one() {
+        let mut s = state(2.0);
+        let mut prev: Option<[(usize, f32); 2]> = None;
+        for f in 0..400u64 {
+            s.pos = f * 2;
+            let (t, n) = s.taps();
+            if f >= 32 {
+                let w: f32 = t[..n].iter().map(|x| x.1).sum();
+                assert!((w - 1.0).abs() < 1e-4, "frame {f}: {w}");
+            }
+            // Inside a grain the source moves one frame per output frame: pitch is kept.
+            if let Some(p) = prev
+                && n == 2
+                && f % 32 != 0
+            {
+                assert!(t[..n].iter().any(|x| p.iter().any(|y| y.0 + 1 == x.0)));
+            }
+            prev = Some(t);
+        }
     }
 }

@@ -1801,6 +1801,36 @@ impl App {
         self.mixer.set_volume(v);
     }
 
+    /// Flips playback between 1× and 2×.
+    pub fn toggle_speed(&mut self) {
+        let v = if self.mixer.speed > 1.0 { 1.0 } else { 2.0 };
+        self.mixer.set_speed(v);
+        self.toast = Some((format!("Playing at {v:.0}×"), false));
+    }
+
+    /// Saves a copy of a file wherever you pick, Downloads to start with.
+    pub fn download(&mut self, id: &str, tx: &mut rune::Tx) {
+        let Some(e) = self.entry(id) else { return };
+        let src = e.item.path.clone();
+        let name = src.file_name().map(|n| n.to_string_lossy().into_owned());
+        let opts = rune::FileDialogOptions {
+            title: "Save a copy".into(),
+            directory: std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Downloads")),
+            file_name: name,
+            ..Default::default()
+        };
+        tx.save_file(opts, move |s: &mut App, r, _tx: &mut rune::Tx| match r {
+            Ok(Some(dst)) => {
+                s.toast = Some(match std::fs::copy(&src, &dst) {
+                    Ok(_) => (format!("Saved {}", dst.display()), false),
+                    Err(e) => (format!("Couldn't save: {e}"), true),
+                });
+            }
+            Ok(None) => {}
+            Err(e) => s.toast = Some((format!("Couldn't open the save dialog: {e:?}"), true)),
+        });
+    }
+
     /// Keeps a zoomed view on the playhead while it plays: it turns the page when the playhead
     /// runs off the right edge.
     fn follow_playhead(&mut self) {

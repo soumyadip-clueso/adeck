@@ -410,9 +410,10 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             s.clear_loop();
             return true;
         }
-        rune::Key::Text(ch) if matches!(ch.as_str(), "=" | "+" | "-" | "f" | "n" | "s" | "[" | "]" | "l") => {
+        rune::Key::Text(ch) if matches!(ch.as_str(), "=" | "+" | "-" | "f" | "n" | "s" | "[" | "]" | "l" | "x") => {
             match ch.as_str() {
                 "l" => s.toggle_loop(),
+                "x" => s.toggle_speed(),
                 "=" | "+" => s.zoom(0.5),
                 "-" => s.zoom(2.0),
                 "f" => s.zoom_fit(),

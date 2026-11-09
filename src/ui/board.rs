@@ -12,7 +12,7 @@ use crate::app::{App, Entry, Tab};
 use crate::board::{Chip, Group, Member};
 use crate::ui::{px, widgets};
 
-const TILE_MIN: f32 = 168.0;
+const TILE_MIN: f32 = 184.0;
 const GAP: f32 = 10.0;
 
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
@@ -173,7 +173,26 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     if let Some(d) = s.decisions.get(&mem.item) {
         top = top.child(text(d.to_uppercase()).font(px::pixel(10.0)).color(if d == "drop" { px::BAD } else { px::SILK }));
     }
-    let mut thumb = el().w_full().h(52.0).radius(3.0).fill(widgets::screen()).clip_rounded(3.0).instant_changes().inert();
+    // Hidden while blind: the file name would give it away.
+    if !hidden && e.is_some() {
+        let id = mem.item.clone();
+        top = top.child(
+            row()
+                .key(format!("dl-{}-{m}", g.key))
+                .size(24.0, 24.0)
+                .center()
+                .radius(4.0)
+                .border(1.0, px::GRILLE)
+                .hover(px::GRILLE)
+                .cursor(rune::Cursor::Pointer)
+                .role("button")
+                .label(format!("Download {label}"))
+                .help("Save a copy of this file")
+                .child(rune::icon(&crate::ui::icons::DROP, 14.0).color(px::SOFT))
+                .on_press_tx(move |s: &mut App, tx: &mut Tx| s.download(&id, tx)),
+        );
+    }
+    let mut thumb = el().w_full().h(60.0).radius(3.0).fill(widgets::screen()).clip_rounded(3.0).instant_changes().inert();
     if let Some(e) = e {
         let px = if t.zoom_sound && e.sound.is_some() { &e.zoom } else { &e.thumb };
         if e.analysis.is_some() {
@@ -182,11 +201,11 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
         if active && let Some((a, b)) = view_of(t, e) {
             let pos = widgets::playhead(s, t);
             if pos >= a && pos <= b && b > a {
-                thumb = thumb.child(el().absolute(((pos - a) / (b - a)) as f32 * (w - 16.0) - 1.0, 0.0).w(2.0).h_full().fill(px::AMBER));
+                thumb = thumb.child(el().absolute(((pos - a) / (b - a)) as f32 * (w - 20.0) - 1.0, 0.0).w(2.0).h_full().fill(px::AMBER));
             }
         }
     }
-    let mut body = col().gap(5.0).child(top).child(thumb);
+    let mut body = col().gap(6.0).child(top).child(thumb);
     if !hidden {
         let nums = numbers_line(&mem.numbers, s, t, g);
         if !nums.is_empty() {
@@ -204,8 +223,8 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     col()
         .key(format!("tile-{}-{m}", g.key))
         .w(w)
-        .px(8.0)
-        .py(8.0)
+        .px(10.0)
+        .py(10.0)
         .radius(4.0)
         .fill(if active { px::SELECTED } else { px::SCREEN })
         .border(

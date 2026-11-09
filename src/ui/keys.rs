@@ -33,6 +33,7 @@ const PLAY: Section = (
         ("[ ]", "Pan"),
         ("⇧ drag", "Select a stretch (Space plays it)"),
         ("L", "Loop the selection"),
+        ("X", "Play at 1× or 2×"),
         ("Esc", "Clear the loop and selection"),
         ("S", "Send to agent"),
     ],
