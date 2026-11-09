@@ -100,6 +100,10 @@ pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
                 .child(px::key("+", false).key("zoom-in").help("Zoom in · =").on_press(|s: &mut App| s.zoom(0.5))),
         )
         .child(el().w(1.0).h(28.0).fill(px::GRILLE));
+    let fast = s.mixer.speed > 1.0;
+    r = r
+        .child(px::key(if fast { "2×" } else { "1×" }, fast).key("speed").w(40.0).help("Play at 1× or 2×, same pitch · X").on_press(|s: &mut App| s.toggle_speed()))
+        .child(el().w(1.0).h(28.0).fill(px::GRILLE));
     if !compact {
         r = r.child(volume(s)).child(el().w(1.0).h(28.0).fill(px::GRILLE));
     }

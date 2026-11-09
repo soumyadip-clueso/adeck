@@ -738,6 +738,25 @@ mod tests {
     /// Shift-drag across a waveform selects a stretch and plays nothing; L loops it, L again
     /// stops looping, shift-click clears it; a plain drag still only scrubs.
     #[test]
+    fn a_tiles_download_button_saves_without_playing_the_tile() {
+        let mut rt = rt(board);
+        let click = |rt: &mut Runtime<App>, key: &str| {
+            let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}")).target;
+            rt.pointer_down(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+            rt.pointer_up(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+            rt.frame(1.0 / 60.0);
+        };
+        assert_eq!(rt.state.current().unwrap().spec.group.as_deref(), Some("whoosh-soft"));
+        click(&mut rt, "dl-ui-click-0");
+        assert_eq!(rt.state.current().unwrap().spec.group.as_deref(), Some("whoosh-soft"), "the press reached the tile");
+        // The speed key flips 1× and 2×.
+        click(&mut rt, "speed");
+        assert_eq!(rt.state.mixer.speed, 2.0);
+        click(&mut rt, "speed");
+        assert_eq!(rt.state.mixer.speed, 1.0);
+    }
+
+    #[test]
     fn shift_drag_on_a_waveform_selects_a_stretch() {
         let shift = |rt: &mut Runtime<App>, on: bool| {
             rt.physical_input(rune::PhysicalInput::Modifiers(rune::Mods { shift: on, ..Default::default() }));

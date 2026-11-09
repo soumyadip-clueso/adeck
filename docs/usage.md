@@ -37,6 +37,8 @@ Tabs come back when you reopen adeck. **+** after the tabs (⌘T) opens a file (
 - **Scrub**: press or drag on any waveform or spectrogram, or on the player's overview.
 - **Select a stretch**: shift-drag across a strip. Space then plays just that stretch and stops at its end; L loops it; shift-click or Esc clears it.
 - **Loop**: L loops the selection, or drag along the time ruler above the strips. Click the ruler or press Esc to clear it.
+- **Speed**: the 1× key in the player (or X) plays at 2× with the pitch kept, for skimming long takes.
+- **Download**: the arrow at a board tile's top right saves a copy of the file (Downloads to start with). It hides while a group is blind.
 - **Zoom**: − and + (or = and −) zoom around the playhead, F fits the file or the loop, [ and ] pan. A zoomed view follows the playhead while it plays.
 - **Volume**: drag across the bars in the player.
 
@@ -95,6 +97,7 @@ Press `?` in the app for this list.
 | [ ] | Pan |
 | ⇧ drag | Select a stretch |
 | L | Loop the selection |
+| X | Play at 1× or 2× |
 | Esc | Clear the loop and selection |
 | S | Send to agent |
 
