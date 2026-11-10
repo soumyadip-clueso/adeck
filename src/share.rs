@@ -92,9 +92,7 @@ pub fn publish(x: Export, cfg: &ShareCfg, aws: &str) -> Result<Share, String> {
             let (out_name, _) = web_audio(src, name, &dir.join("audio"))?;
             names.insert(name.clone(), Value::String(out_name));
         }
-        // Length, loudness and the waveform, from the analysis cache (or a fresh decode).
-        if let Ok(a) = crate::derive::analyse(src) {
-            let facts = serde_json::json!({"secs": a.secs, "lufs": a.lufs, "peaks": peaks(&a.envelope, 700)});
+        if let Some(facts) = facts(src) {
             fill(&mut page, name, &facts);
         }
     }
@@ -121,6 +119,98 @@ pub fn publish(x: Export, cfg: &ShareCfg, aws: &str) -> Result<Share, String> {
     let url = find_str(&out, "url").ok_or_else(|| format!("The publisher printed no url: {}", String::from_utf8_lossy(&serde_json::to_vec(&out).unwrap_or_default())))?;
     let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     Ok(Share { slug, title: x.title, url, created, files: x.files.len(), audio: s3_base.map_or_else(|| "bundle".to_owned(), |(uri, _)| uri), gone: false })
+}
+
+/// Length, loudness, the waveform, the bars and the spectrogram of one file, from the analysis
+/// cache (or a fresh decode), so the page draws the same LED screens the app does.
+fn facts(src: &Path) -> Option<Value> {
+    let a = crate::derive::analyse(src).ok()?;
+    let mut facts = serde_json::json!({"secs": a.secs, "lufs": a.lufs, "peaks": peaks(&a.envelope, 700), "rms": rms(&a.envelope, 700)});
+    let bars: Vec<f64> = a.beats.iter().filter(|(_, down)| *down).map(|(t, _)| (t * 1000.0).round() / 1000.0).collect();
+    if !bars.is_empty() {
+        facts["bars"] = serde_json::json!(bars);
+    }
+    if let Some(raw) = crate::derive::cached_spec(src, &a) {
+        let (cols, rows, grid) = spec_grid(&raw, a.spec_w as usize, a.spec_h as usize, 480, 48);
+        use base64::Engine as _;
+        facts["spec"] = serde_json::json!({"cols": cols, "rows": rows, "nyq": a.rate / 2, "data": base64::engine::general_purpose::STANDARD.encode(grid)});
+    }
+    Some(facts)
+}
+
+/// Puts a published share on this build's page: its data is read back from the copy kept in the
+/// cache, each file's screens are worked out again from the audio (the bundled copy, or the
+/// local file behind a `[[share.links]]` URL), and it's published again under the same slug, so
+/// the link and everyone's votes stay. Returns how many files got fresh screens.
+pub fn refresh(sh: &Share, cfg: &ShareCfg) -> Result<usize, String> {
+    let command = cfg.command().ok_or("Sharing isn't set up.")?;
+    let dir = config::cache_dir().join("shares").join(&sh.slug);
+    let html = std::fs::read_to_string(dir.join("index.html")).map_err(|e| format!("No local copy of {} to rebuild from: {e}", sh.slug))?;
+    let (open, close) = (r#"<script id="data" type="application/json">"#, "</script>");
+    let at = html.find(open).ok_or("The cached page has no data in it.")? + open.len();
+    let end = at + html[at..].find(close).ok_or("The cached page's data never ends.")?;
+    let mut page: Value = serde_json::from_str(&html[at..end].replace("<\\/", "</")).map_err(|e| format!("The cached page's data doesn't parse: {e}"))?;
+    let mut fresh = 0;
+    refill(&mut page, &dir, &cfg.links, &mut fresh);
+    let json = serde_json::to_string(&page).map_err(|e| e.to_string())?.replace("</", "<\\/");
+    let out = PAGE.replace("__TITLE__", &html_escape(&sh.title)).replace("/*__DATA__*/null", &json);
+    std::fs::write(dir.join("index.html"), out).map_err(|e| e.to_string())?;
+    run(&command, &["publish", &dir.display().to_string(), &sh.slug, &sh.title])?;
+    Ok(fresh)
+}
+
+/// Adds fresh facts to every member whose audio can still be found on this machine.
+fn refill(v: &mut Value, dir: &Path, links: &[config::ShareLink], fresh: &mut usize) {
+    match v {
+        Value::Object(m) => {
+            if let Some(src) = m.get("src").and_then(Value::as_str)
+                && let Some(path) = local_for(src, dir, links)
+                && let Some(Value::Object(f)) = facts(&path)
+            {
+                m.extend(f);
+                *fresh += 1;
+            }
+            for (_, x) in m.iter_mut() {
+                refill(x, dir, links, fresh);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| refill(x, dir, links, fresh)),
+        _ => {}
+    }
+}
+
+/// Where a page's `src` lives on this machine: beside the page when it was bundled, or under the
+/// link folder whose URL serves it.
+fn local_for(src: &str, dir: &Path, links: &[config::ShareLink]) -> Option<PathBuf> {
+    if !(src.starts_with("https://") || src.starts_with("http://")) {
+        let p = dir.join(src);
+        return p.is_file().then_some(p);
+    }
+    // Several folders can sit behind one URL: the first that holds the file wins.
+    links.iter().find_map(|l| {
+        let base = format!("{}/", l.url.trim_end_matches('/'));
+        let rest = src.strip_prefix(&base)?;
+        let p = rest.split('/').fold(config::expand(&l.dir), |p, part| p.join(url_decode(part)));
+        p.is_file().then_some(p)
+    })
+}
+
+fn url_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let Some(v) = s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Takes a share down: the page (unless it's already gone) and its S3 audio.
@@ -322,6 +412,38 @@ pub fn peaks(env: &[[f32; 3]], n: usize) -> Vec<f32> {
         .collect()
 }
 
+/// The loudness core for the page's waveform: `n` RMS heights, 0 to 1.
+pub fn rms(env: &[[f32; 3]], n: usize) -> Vec<f32> {
+    if env.is_empty() {
+        return Vec::new();
+    }
+    let n = n.min(env.len());
+    (0..n)
+        .map(|i| {
+            let (a, b) = (i * env.len() / n, ((i + 1) * env.len() / n).max(i * env.len() / n + 1));
+            (env[a..b].iter().map(|c| c[2]).fold(0.0f32, f32::max) * 1000.0).round() / 1000.0
+        })
+        .collect()
+}
+
+/// The spectrogram shrunk for the page: at most `cols`×`rows` cells, each the loudest grey under
+/// it (rows from the top, low frequencies at the bottom, as the cache has them).
+fn spec_grid(raw: &[u8], sw: usize, sh: usize, cols: usize, rows: usize) -> (usize, usize, Vec<u8>) {
+    let (cols, rows) = (cols.min(sw), rows.min(sh));
+    let mut out = vec![0u8; cols * rows];
+    if raw.len() < sw * sh * 4 {
+        return (cols, rows, out);
+    }
+    for r in 0..rows {
+        let (ya, yb) = (r * sh / rows, ((r + 1) * sh / rows).max(r * sh / rows + 1));
+        for c in 0..cols {
+            let (xa, xb) = (c * sw / cols, ((c + 1) * sw / cols).max(c * sw / cols + 1));
+            out[r * cols + c] = (ya..yb).flat_map(|y| (xa..xb).map(move |x| raw[(y * sw + x) * 4])).max().unwrap_or(0);
+        }
+    }
+    (cols, rows, out)
+}
+
 /// Metadata safe to publish: no local paths.
 pub fn public_meta(pairs: impl IntoIterator<Item = (String, String)>) -> serde_json::Map<String, Value> {
     pairs.into_iter().filter(|(_, v)| !(v.starts_with('/') || v.starts_with("~/") || v.contains("/Users/") || v.starts_with("ref:"))).map(|(k, v)| (k, Value::String(v))).collect()
@@ -357,6 +479,29 @@ mod tests {
         let links = [config::ShareLink { dir: "/no/such/root/run-raw".into(), url: "https://cdn.example/runs/run/music/".into() }];
         assert_eq!(link_url(Path::new("/no/such/root/run-raw/a b.mp3"), &links).as_deref(), Some("https://cdn.example/runs/run/music/a%20b.mp3"));
         assert_eq!(link_url(Path::new("/no/such/root/other/a.mp3"), &links), None);
+    }
+
+    #[test]
+    fn link_urls_lead_back_to_their_files() {
+        let root = std::env::temp_dir().join(format!("adeck-share-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        std::fs::write(root.join("run/a b.mp3"), b"x").unwrap();
+        let links = [config::ShareLink { dir: root.join("other"), url: "https://cdn.example/runs/".into() }, config::ShareLink { dir: root.join("run"), url: "https://cdn.example/runs/".into() }];
+        assert_eq!(local_for("https://cdn.example/runs/a%20b.mp3", Path::new("/nowhere"), &links), Some(root.join("run/a b.mp3")));
+        assert_eq!(local_for("https://cdn.example/runs/missing.mp3", Path::new("/nowhere"), &links), None);
+        assert_eq!(local_for("run/a b.mp3", &root, &links), Some(root.join("run/a b.mp3")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spec_grid_keeps_the_loudest_cell() {
+        // 4×2 RGBA picture, one bright pixel in the bottom-right quarter.
+        let mut raw = vec![22u8; 4 * 2 * 4];
+        raw[(4 + 3) * 4] = 250;
+        let (c, r, g) = spec_grid(&raw, 4, 2, 2, 1);
+        assert_eq!((c, r), (2, 1));
+        assert_eq!(g, vec![22, 250]);
+        assert_eq!(rms(&[[0.0, 0.0, 0.2], [0.0, 0.0, 0.6]], 1), vec![0.6]);
     }
 
     #[test]
