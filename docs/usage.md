@@ -66,7 +66,16 @@ prefix = "adeck-"
 audio = "bundle"                           # audio inside the page, or "s3" with [share.s3] below
 # [share.s3]
 # bucket = "…"; prefix = "shares"; profile = "…"; region = "…"; public_url = "https://…"
+
+# Files that are already public (say, downloaded from a bucket a CDN serves) aren't copied:
+# the page plays them from <url>/<path under dir>. Each is checked first (HEAD, same size);
+# anything that doesn't match is copied as usual. Repeat the block per folder.
+[[share.links]]
+dir = "~/music/run-12"
+url = "https://cdn.example.com/runs/run-12/"
 ```
+
+A big board with linked files shares fine; bundled audio is limited by what your host accepts.
 
 ## Keyboard
 
