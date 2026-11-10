@@ -8,6 +8,8 @@
 //!   `<command> list`                          → prints JSON: a list (or `{"sites": [...]}`) of `{slug, url}`
 //! Audio goes in the page's folder (`audio = "bundle"`), or to S3 (`audio = "s3"`) under
 //! `<prefix>/<slug>/`, served from `public_url`. Reference-pack files are never shared.
+//! Files under a `[[share.links]]` folder that its URL already serves (same size) aren't copied
+//! at all: the page plays them from there.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -82,9 +84,14 @@ pub fn publish(x: Export, cfg: &ShareCfg, aws: &str) -> Result<Share, String> {
     // Audio: browser-friendly, small enough to load quickly.
     let mut names = serde_json::Map::new();
     let mut page = x.page.clone();
+    let linked = linked_urls(&x.files, &cfg.links);
     for (src, name) in &x.files {
-        let (out_name, _) = web_audio(src, name, &dir.join("audio"))?;
-        names.insert(name.clone(), Value::String(out_name));
+        if let Some(url) = linked.get(name) {
+            names.insert(name.clone(), Value::String(url.clone()));
+        } else {
+            let (out_name, _) = web_audio(src, name, &dir.join("audio"))?;
+            names.insert(name.clone(), Value::String(out_name));
+        }
         // Length, loudness and the waveform, from the analysis cache (or a fresh decode).
         if let Ok(a) = crate::derive::analyse(src) {
             let facts = serde_json::json!({"secs": a.secs, "lufs": a.lufs, "peaks": peaks(&a.envelope, 700)});
@@ -232,7 +239,7 @@ fn rewrite_srcs(v: &mut Value, names: &serde_json::Map<String, Value>, base: &st
             if let Some(Value::String(s)) = m.get("src")
                 && let Some(Value::String(n)) = names.get(s)
             {
-                let full = format!("{base}{n}");
+                let full = if n.starts_with("https://") || n.starts_with("http://") { n.clone() } else { format!("{base}{n}") };
                 m.insert("src".into(), Value::String(full));
             }
             for (_, x) in m.iter_mut() {
@@ -242,6 +249,50 @@ fn rewrite_srcs(v: &mut Value, names: &serde_json::Map<String, Value>, base: &st
         Value::Array(a) => a.iter_mut().for_each(|x| rewrite_srcs(x, names, base)),
         _ => {}
     }
+}
+
+/// Where a file is already public, if a link folder holds it.
+fn link_url(src: &Path, links: &[config::ShareLink]) -> Option<String> {
+    let src = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    links.iter().find_map(|l| {
+        let dir = config::expand(&l.dir);
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let rel = src.strip_prefix(&dir).ok()?;
+        let parts: Vec<String> = rel.components().map(|c| url_part(&c.as_os_str().to_string_lossy())).collect();
+        (!parts.is_empty() && !l.url.is_empty()).then(|| format!("{}/{}", l.url.trim_end_matches('/'), parts.join("/")))
+    })
+}
+
+fn url_part(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// The files the link folders' URLs really serve (HEAD 200, same size), by page name. The rest get copied.
+fn linked_urls(files: &[(PathBuf, String)], links: &[config::ShareLink]) -> std::collections::HashMap<String, String> {
+    let todo: Vec<(&String, String, u64)> = files
+        .iter()
+        .filter_map(|(src, name)| Some((name, link_url(src, links)?, std::fs::metadata(src).ok()?.len())))
+        .collect();
+    let out = std::sync::Mutex::new(std::collections::HashMap::new());
+    std::thread::scope(|s| {
+        for chunk in todo.chunks(todo.len().div_ceil(12).max(1)) {
+            let out = &out;
+            s.spawn(move || {
+                for (name, url, size) in chunk {
+                    if remote_size(url) == Some(*size) {
+                        out.lock().unwrap().insert((*name).clone(), url.clone());
+                    }
+                }
+            });
+        }
+    });
+    out.into_inner().unwrap()
+}
+
+/// The size a URL serves, from a HEAD request.
+fn remote_size(url: &str) -> Option<u64> {
+    let out = Command::new("curl").args(["-sfIL", "--max-time", "10", "-o", "/dev/null", "-w", "%header{content-length}", url]).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().parse().ok()).flatten()
 }
 
 fn find_str(v: &Value, key: &str) -> Option<String> {
@@ -293,8 +344,19 @@ mod tests {
         let names: serde_json::Map<String, Value> = [("m0".to_owned(), Value::String("m0.wav".into()))].into_iter().collect();
         rewrite_srcs(&mut v, &names, "https://cdn/x/");
         assert_eq!(v["groups"][0]["members"][0]["src"], "https://cdn/x/m0.wav");
+        let names: serde_json::Map<String, Value> = [("m0".to_owned(), Value::String("https://cdn/runs/a.mp3".into()))].into_iter().collect();
+        let mut v = serde_json::json!({"src": "m0"});
+        rewrite_srcs(&mut v, &names, "audio/");
+        assert_eq!(v["src"], "https://cdn/runs/a.mp3");
         let m = public_meta([("prompt".into(), "soft".into()), ("source".into(), "/Users/me/a.wav".into()), ("ref".into(), "ref:kick/a.wav".into())]);
         assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn link_folders_map_files_to_their_public_url() {
+        let links = [config::ShareLink { dir: "/no/such/root/run-raw".into(), url: "https://cdn.example/runs/run/music/".into() }];
+        assert_eq!(link_url(Path::new("/no/such/root/run-raw/a b.mp3"), &links).as_deref(), Some("https://cdn.example/runs/run/music/a%20b.mp3"));
+        assert_eq!(link_url(Path::new("/no/such/root/other/a.mp3"), &links), None);
     }
 
     #[test]

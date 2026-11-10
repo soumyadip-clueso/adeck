@@ -46,6 +46,16 @@ pub struct ShareCfg {
     /// `bundle` (audio inside the page) or `s3`.
     pub audio: String,
     pub s3: ShareS3,
+    /// Folders whose files are already public somewhere: the page links there instead of copying.
+    pub links: Vec<ShareLink>,
+}
+
+/// A local folder and the URL that serves the same files, e.g. a CDN in front of the bucket
+/// they were downloaded from. `<url>/<path under dir>` must be the same file, byte for byte.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ShareLink {
+    pub dir: PathBuf,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -61,7 +71,7 @@ pub struct ShareS3 {
 
 impl Default for ShareCfg {
     fn default() -> Self {
-        ShareCfg { command: String::new(), prefix: "adeck-".into(), audio: "bundle".into(), s3: ShareS3::default() }
+        ShareCfg { command: String::new(), prefix: "adeck-".into(), audio: "bundle".into(), s3: ShareS3::default(), links: Vec::new() }
     }
 }
 
