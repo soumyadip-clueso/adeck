@@ -153,7 +153,7 @@ fn walk_runs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Run>) {
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
-            if !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+            if !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) && !is_stems_dir(&p) {
                 subdirs.push(p);
             }
         } else if media_of(&p).is_some() {
@@ -171,6 +171,11 @@ fn walk_runs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Run>) {
     }
 }
 
+/// `<name>.stems`: a track's stems (see `stems.rs`).
+fn is_stems_dir(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "stems")
+}
+
 /// Every media file under `dir`, sorted, sub-folders included.
 pub fn media_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -181,8 +186,11 @@ pub fn media_files(dir: &Path) -> Vec<PathBuf> {
         };
         for e in rd.flatten() {
             let p = e.path();
+            // A track's stems are parts of it, not takes of their own.
             if p.is_dir() {
-                stack.push(p);
+                if !is_stems_dir(&p) {
+                    stack.push(p);
+                }
             } else if media_of(&p).is_some() {
                 out.push(p);
             }

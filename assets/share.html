@@ -398,6 +398,39 @@ textarea.noteIn:focus { border-color: var(--silk); }
 .legend .kc { height: 18px; min-width: 18px; padding: 0 4px; font-size: 10px; color: var(--silk); }
 .keys .note { margin: 0 20px 18px; padding: 8px 10px; font-size: 12px; color: var(--silk); }
 @media (max-width: 900px) { .legend { display: none; } }
+/* Stems: a track's parts in lanes under it, on the page's one transport */
+.sbtn { appearance: none; flex: none; height: 22px; padding: 0 7px; border: 1px solid var(--grille); border-radius: 3px; background: transparent; color: var(--soft); font: 400 10px/1 var(--pixel); text-transform: uppercase; letter-spacing: .06em; cursor: pointer; }
+.tl .sbtn { margin-left: auto; align-self: center; }
+.sbtn:hover { background: var(--selected); }
+.sbtn.on { background: var(--led); border-color: var(--led); color: var(--case); }
+.low { display: flex; align-items: center; gap: 6px; font: 400 10px/1 var(--pixel); text-transform: uppercase; letter-spacing: .05em; color: var(--faint-c); }
+.low b { font-weight: 400; color: var(--silk); }
+.low i { position: relative; width: 48px; height: 4px; border-radius: 1px; background: var(--grille); overflow: hidden; }
+.low i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--f); background: var(--silk); }
+.low.loud b { color: var(--close-c); } .low.loud i::after { background: var(--close-c); }
+.low.voice { color: var(--bad); }
+.lanes { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--grille-on); border-radius: 4px; background: var(--screen); margin-bottom: 8px; }
+.tiles .lanes { margin-bottom: 0; }
+.lhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 28px; font: 400 11px/1 var(--pixel); text-transform: uppercase; letter-spacing: .06em; color: var(--faint-c); }
+.lhead .sp { flex: 1; }
+.lhead .model { color: var(--off); font-size: 10px; }
+.lhead .bass { color: var(--silk); } .lhead .bass.loud { color: var(--close-c); }
+.ab { display: inline-flex; gap: 4px; }
+.ab button { appearance: none; height: 28px; padding: 0 9px; border: 1px solid var(--grille); border-radius: 4px; background: transparent; color: var(--soft); font: 400 12px/1 var(--pixel); text-transform: uppercase; letter-spacing: .06em; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.ab button small { font-size: 10px; color: var(--off); }
+.ab button:hover { background: var(--selected); }
+.ab button.on { background: var(--led); border-color: var(--led); color: var(--case); } .ab button.on small { color: var(--silk); }
+.lane { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 10px; align-items: center; height: 48px; }
+.lane .li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lane .ln { flex: 1; min-width: 0; font: 400 12px/1.2 var(--pixel); text-transform: uppercase; letter-spacing: .05em; color: var(--soft); }
+.lane.heard .ln { color: var(--led); }
+.lane .ln small { display: block; margin-top: 3px; font-size: 9px; color: var(--faint-c); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lane canvas.wave { height: 48px; cursor: pointer; touch-action: none; }
+.lane .sm { width: 24px; height: 24px; padding: 0; border: 1px solid var(--grille); border-radius: 3px; background: transparent; color: var(--soft); font: 400 10px/1 var(--pixel); cursor: pointer; }
+.lane .sm:hover { background: var(--selected); }
+.lane .sm.on { background: var(--led); border-color: var(--led); color: var(--case); }
+.lanes .msg { color: var(--faint-c); font: 400 10px/1.4 var(--pixel); text-transform: uppercase; letter-spacing: .05em; }
+@media (max-width: 700px) { .lane { grid-template-columns: 118px minmax(0, 1fr); gap: 6px; } .lhead .model { display: none; } }
 </style>
 </head>
 <body>
@@ -490,29 +523,48 @@ $('#copy').addEventListener('click', () => { const u = location.href.split('#')[
 
 // Audio: one group plays at a time; every member of it runs in step and only the gains move.
 let ctx = null, master = null, analyser = null, matchOn = true;
-const audio = () => { if (!ctx) { ctx = new (window.AudioContext || window.webkitAudioContext)(); master = ctx.createGain(); master.gain.value = +$('#vol').value; analyser = ctx.createAnalyser(); analyser.fftSize = 512; master.connect(analyser); analyser.connect(ctx.destination); } return ctx; };
+const audio = () => { if (!ctx) { try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {} ctx = new (window.AudioContext || window.webkitAudioContext)(); master = ctx.createGain(); master.gain.value = +$('#vol').value; analyser = ctx.createAnalyser(); analyser.fftSize = 512; master.connect(analyser); analyser.connect(ctx.destination); } return ctx; };
 const buffers = new Map();
 const load = src => { if (!buffers.has(src)) buffers.set(src, fetch(src).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then(b => audio().decodeAudioData(b))); return buffers.get(src); };
 const trim = m => matchOn && m.lufs != null ? Math.min(4, Math.pow(10, (TARGET - m.lufs) / 20)) : 1;
 const P = { g: null, active: 0, playing: false, at: 0, started: 0, nodes: [], once: false };
+// Stems: lanes open under the sound you hear (S.on), heard instead of the mix (S.mode), soloed
+// and muted. They play as more nodes on the same clock; only the gains move.
+const STEMS = ['drums', 'bass', 'other', 'vocals'];
+const HAS_STEMS = D.groups.some(g => g.members.some(m => m.stems));
+const LOUD_BASS = 0.4;
+const S = { on: false, mode: true, solo: [false, false, false, false], mute: [false, false, false, false] };
+const stemGains = () => { const any = S.solo.some(Boolean); return STEMS.map((_, k) => (any ? S.solo[k] : !S.mute[k]) ? 1 : 0); };
+const heardStems = () => S.on && S.mode && P.g != null && !!(D.groups[P.g].members[P.active] || {}).stems;
+function gainOf(x) {
+  const m = D.groups[P.g].members[x.i];
+  if (x.k != null) return x.i === P.active && heardStems() ? stemGains()[x.k] * trim(m) : 0;
+  return x.i === P.active && !heardStems() ? trim(m) : 0;
+}
+function applyGains() { if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(gainOf(x), ctx.currentTime, 0.006)); }
 const len = g => Math.max(0.001, ...g.members.map(m => m.secs || 0));
 const now = () => P.playing ? P.at + (ctx.currentTime - P.started) : P.at;
 function stopNodes() { P.nodes.forEach(x => { try { x.src.stop(); } catch (_) {} }); P.nodes = []; }
 async function start(g, at, once) {
   audio(); if (ctx.state === 'suspended') await ctx.resume();
   stopNodes();
-  const ms = D.groups[g].members;
-  const bufs = await Promise.all(ms.map(m => m.src ? load(m.src).catch(() => null) : null));
+  const ms = D.groups[g].members, am = ms[P.active], sm = S.on && !once && am && am.stems ? am.stems : [];
+  if (sm.length) lanesNote('Loading stems…');
+  const [bufs, sbufs] = await Promise.all([Promise.all(ms.map(m => m.src ? load(m.src).catch(() => null) : null)), Promise.all(sm.map(x => load(x.src).catch(() => null)))]);
   if (P.g !== g) return;
-  const t0 = ctx.currentTime + 0.03;
-  P.nodes = ms.map((m, i) => {
-    if (!bufs[i] || (once && i !== P.active)) return null;
-    const src = ctx.createBufferSource(); src.buffer = bufs[i];
-    const gain = ctx.createGain(); gain.gain.value = i === P.active ? trim(m) : 0;
+  if (sm.length) lanesNote(sbufs.every(Boolean) ? '' : 'Some stems didn’t load');
+  const t0 = ctx.currentTime + 0.03, made = [];
+  const node = (buf, x) => {
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const gain = ctx.createGain(); gain.gain.value = gainOf(x);
     src.connect(gain).connect(master);
-    if (at < bufs[i].duration) src.start(t0, at);
-    return { src, gain, i };
-  }).filter(Boolean);
+    if (at < buf.duration) src.start(t0, at);
+    made.push({ src, gain, ...x });
+  };
+  ms.forEach((m, i) => { if (bufs[i] && !(once && i !== P.active)) node(bufs[i], { i }); });
+  sbufs.forEach((b, k) => { if (b) node(b, { i: P.active, k }); });
+  stopNodes();
+  P.nodes = made;
   P.at = at; P.started = t0; P.playing = true; P.once = once;
   draw();
 }
@@ -526,13 +578,24 @@ function select(g, i, fromTop, play) {
   if (P.g !== g) { pause(); P.g = g; P.at = 0; }
   P.active = i;
   if (pads || fromTop) { changed(); start(g, 0, pads); return; }
-  if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(x.i === i ? trim(D.groups[g].members[x.i]) : 0, ctx.currentTime, 0.004));
+  // With the lanes open the new sound's stems have to come in: restart at the same place.
+  if (P.playing) { if (S.on && !P.nodes.some(x => x.k != null && x.i === i) && D.groups[g].members[i].stems) start(g, now(), false); else applyGains(); }
   else if (play) start(g, P.at >= len(D.groups[g]) - 0.01 ? 0 : P.at, false);
   changed();
 }
 function toggle() { if (P.g == null) { P.g = firstVisible(); changed(); } P.playing ? pause() : start(P.g, P.at >= len(D.groups[P.g]) - 0.01 ? 0 : P.at, false); }
 function seek(g, at, silent) { const was = P.playing && P.g === g; if (P.g !== g) focus(g); pause(); P.at = Math.max(0, Math.min(at, len(D.groups[g]))); if (was && !silent) start(g, P.at, false); draw(); }
-const setMatch = on => { matchOn = on; $('#match').classList.toggle('on', on); if (P.playing) P.nodes.forEach(x => x.gain.gain.setTargetAtTime(x.i === P.active ? trim(D.groups[P.g].members[x.i]) : 0, ctx.currentTime, 0.004)); sheet(); draw(); };
+const setMatch = on => { matchOn = on; $('#match').classList.toggle('on', on); applyGains(); sheet(); draw(); };
+// Opens the lanes under a sound (selecting it), or closes them when they're open on it.
+function toggleStems(gi, mi) {
+  const was = P.playing && P.g === gi;
+  if (S.on && P.g === gi && P.active === mi) S.on = false;
+  else { if (P.g !== gi) { release(vk(gi, mi)); pause(); P.g = gi; P.at = 0; } P.active = mi; S.on = true; S.mode = true; }
+  changed();
+  if (was) start(gi, now(), false);
+}
+function setStemMode(on) { S.mode = on; applyGains(); renderLanes(); }
+function stemPress(k, mute) { (mute ? S.mute : S.solo)[k] = !(mute ? S.mute : S.solo)[k]; S.mode = true; applyGains(); renderLanes(); }
 
 // Drag along a strip or the transport to move the playhead silently; it resumes on release.
 function scrubber(el, gi, span, frac) {
@@ -553,7 +616,7 @@ const AMBER = '#e8b33a', UNLIT = 'rgba(255,255,255,0.047)';
 // Dot pitch: 4pt on strips, smaller on thumbnails, on whole device pixels.
 const cellFor = (hh, dpr) => Math.max(2, Math.round(Math.min(8, Math.max(4, Math.floor(hh / 11))) / 2 * dpr));
 const specBytes = m => { if (!m.spec) return null; if (!m._spec) { const b = atob(m.spec.data), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); m._spec = u; } return m._spec; };
-function ledScreen(m, W, H, dpr, span, spec, bars) {
+function ledScreen(m, W, H, dpr, span, spec, bars, peak) {
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const x = cv.getContext('2d'), cell = cellFor(H / dpr, dpr), d = cell - Math.max(1, Math.floor(cell / 4)); // always a gap, even at 1×
   const ww = Math.min(W, Math.round(W * Math.min(1, (m.secs || 0) / span))), cols = Math.ceil(ww / cell), rows = Math.floor(H / cell);
@@ -582,9 +645,13 @@ function ledScreen(m, W, H, dpr, span, spec, bars) {
     });
     return cv;
   }
-  const pk = m.peaks || [], rm = m.rms || pk.map(p => p * 0.55), n = pk.length;
+  // A stem's lane is on one decibel scale against the loudest stem (48 dB to nothing).
+  const db = v => Math.max(0, 1 + 20 * Math.log10(Math.max(v, 1e-9) / peak) / 48);
+  let pk = m.peaks || [], rm = m.rms || pk.map(p => p * 0.55);
+  if (peak) { pk = pk.map(db); rm = rm.map(db); }
+  const n = pk.length;
   if (!n) return cv;
-  const gain = Math.min(64, 0.92 / Math.max(1e-6, ...pk)), mid = rows / 2;
+  const gain = peak ? 0.92 : Math.min(64, 0.92 / Math.max(1e-6, ...pk)), mid = rows / 2;
   for (let c = 0; c < cols; c++) {
     const a = Math.floor(c * cell / ww * n), b = Math.min(n, Math.max(a + 1, Math.ceil(Math.min(ww, (c + 1) * cell) / ww * n)));
     let hp = 0, hr = 0; for (let i = a; i < b; i++) { hp = Math.max(hp, pk[i]); hr = Math.max(hr, rm[i] || 0); }
@@ -609,6 +676,84 @@ function paintWave(c) {
   if (!st || st.key !== key) { st = { key, img: ledScreen(m, W, H, dpr, span, spec, c.dataset.bars === '1') }; screens.set(c, st); }
   const x = c.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, H); x.drawImage(st.img, 0, 0);
   if (P.g === gi && P.active === mi) { const ph = now() / span * W; if (ph >= 0 && ph <= W) { x.fillStyle = AMBER; x.fillRect(Math.round(ph - dpr), 0, Math.round(2 * dpr), H); } }
+}
+// A stem's lane: drawn at the loudest of the track's stems, so the parts keep their sizes
+// against each other; dimmed when you can't hear it.
+function paintLane(c) {
+  const gi = P.g, m = gi != null && D.groups[gi].members[P.active], k = +c.dataset.k, st = m && m.stems && m.stems[k];
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, hh = c.clientHeight;
+  if (!w || !st) return;
+  const W = Math.round(w * dpr), H = Math.round(hh * dpr), span = laneSpan(gi, m);
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+  const peak = Math.max(1e-4, ...m.stems.flatMap(x => x.peaks || [0]));
+  const key = `${gen}:${W}x${H}:${gi}.${P.active}.${k}:${span}:${peak}`;
+  let sc = screens.get(c);
+  if (!sc || sc.key !== key) { sc = { key, img: ledScreen(st, W, H, dpr, span, false, false, peak) }; screens.set(c, sc); }
+  const x = c.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, H); x.drawImage(sc.img, 0, 0);
+  if (!(heardStems() && stemGains()[k])) { x.fillStyle = 'rgba(20,20,21,0.72)'; x.fillRect(0, 0, W, H); }
+  const ph = now() / span * W; if (ph >= 0 && ph <= W) { x.fillStyle = AMBER; x.fillRect(Math.round(ph - dpr), 0, Math.round(2 * dpr), H); }
+}
+const laneSpan = (gi, m) => KIND === 'compare' ? len(D.groups[gi]) : (m.secs || len(D.groups[gi]));
+const pct = f => `${Math.round(f * 100)}%`;
+function lowEnd(m) {
+  const b = m.stems && m.stems[1] && m.stems[1].share; if (b == null) return null;
+  const r = h('div', `low${b >= LOUD_BASS ? ' loud' : ''}`); r.title = 'The bass stem’s share of the track’s loudness';
+  const i = h('i'); i.style.setProperty('--f', pct(b)); r.append(document.createTextNode('Low end'), h('b', null, pct(b)), i);
+  // Vocals are only a check: a generated bed shouldn't have any.
+  const v = m.stems[3] && m.stems[3].share;
+  if (v != null && v >= 0.05) { const w = h('div', 'low voice', `Vocals stem ${pct(v)}`); w.title = 'Something in the vocals stem: a voice, or a lead the splitter took for one. Solo vocals to hear it.'; const f = document.createDocumentFragment(); f.append(r, w); return f; }
+  return r;
+}
+function stemBtn(gi, mi) {
+  const b = h('button', 'sbtn', 'Stems'); b.type = 'button'; b.dataset.g = gi; b.dataset.m = mi; b.title = 'Drums, bass, other and vocals in lanes: solo, mute, A/B against the mix · T';
+  b.addEventListener('click', e => { e.stopPropagation(); toggleStems(gi, mi); });
+  b.addEventListener('keydown', e => e.stopPropagation());
+  return b;
+}
+let laneMsg = '';
+const lanesNote = t => { laneMsg = t; const n = $('.lanes .msg'); if (n) n.textContent = t; };
+// The lanes go right under the row of the sound you hear (board) or under its strip (compare).
+function renderLanes() {
+  $$('.lanes').forEach(x => x.remove());
+  $$('.sbtn').forEach(b => b.classList.toggle('on', S.on && P.g === +b.dataset.g && P.active === +b.dataset.m));
+  if (!S.on || P.g == null) return;
+  const gi = P.g, m = D.groups[gi].members[P.active];
+  if (!m || !m.stems) return;
+  const el = h('div', 'lanes'), hd = h('div', 'lhead');
+  const ab = h('span', 'ab');
+  [['Mix', false, 'Hear the full mix · A'], ['Stems', true, 'Hear the stems summed, as soloed and muted · A. Against the mix, what’s left is the separation’s artefacts.']].forEach(([w, on, tip]) => {
+    const b = h('button', S.mode === on ? 'on' : null, w); b.type = 'button'; b.title = tip; b.append(h('small', null, 'A'));
+    b.addEventListener('click', () => setStemMode(on)); ab.append(b);
+  });
+  hd.append(document.createTextNode('Stems'), ab);
+  if (m.stem_model) hd.append(h('span', 'model', m.stem_model));
+  hd.append(h('span', 'sp'));
+  const bs = m.stems[1] && m.stems[1].share;
+  if (bs != null) hd.append(h('span', `bass${bs >= LOUD_BASS ? ' loud' : ''}`, `Bass is ${pct(bs)} of the loudness`));
+  const x = h('button', 'sbtn', 'Close'); x.type = 'button'; x.title = 'Close the lanes · T'; x.addEventListener('click', () => toggleStems(gi, P.active)); hd.append(x);
+  el.append(hd);
+  const gains = stemGains();
+  m.stems.forEach((st, k) => {
+    const lane = h('div', `lane${heardStems() && gains[k] ? ' heard' : ''}`), li = h('div', 'li'), ln = h('div', 'ln', st.stem);
+    const sub = [st.lufs != null ? (st.lufs <= -69 ? 'silent' : `${st.lufs.toFixed(1)} LUFS`) : null, st.share != null ? pct(st.share) : null].filter(Boolean).join(' · ');
+    if (sub) ln.append(h('small', null, sub));
+    const sb = h('button', `sm${S.solo[k] ? ' on' : ''}`, 'S'); sb.type = 'button'; sb.title = `Solo ${st.stem}`; sb.addEventListener('click', () => stemPress(k, false));
+    const mb = h('button', `sm${S.mute[k] ? ' on' : ''}`, 'M'); mb.type = 'button'; mb.title = `Mute ${st.stem}`; mb.addEventListener('click', () => stemPress(k, true));
+    li.append(ln, sb, mb);
+    const c = h('canvas', 'wave lanec'); c.dataset.k = k;
+    if (st.src) scrubber(c, gi, () => laneSpan(gi, m));
+    lane.append(li, c); el.append(lane);
+  });
+  el.append(h('div', 'msg', laneMsg));
+  if (KIND === 'compare') { const row = $(`.strip[data-g="${gi}"][data-m="${P.active}"]`); if (row) row.after(el); }
+  else {
+    const grid = $('.tiles', groupEls[gi]); if (!grid) return;
+    const tiles = $$('.tile', grid).filter(t => !t.classList.contains('hidden')), at = tiles.findIndex(t => +t.dataset.m === P.active);
+    if (at < 0) return;
+    const cols = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').length);
+    tiles[Math.min(tiles.length - 1, Math.ceil((at + 1) / cols) * cols - 1)].after(el);
+  }
+  draw();
 }
 const nums = m => Object.entries(m.numbers || {}).map(([k, v]) => `${((D.labels || {})[k] || k).replace(/-/g, '\u2011')} ${typeof v === 'number' ? +v.toFixed(3) : v}`).join(' · ') || (m.lufs != null ? `${m.lufs.toFixed(1)} LUFS` : '');
 const ticks = secs => { const step = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60].find(s => secs / s <= 6) || 120; const out = []; for (let t = 0; t < secs - step * 0.3; t += step) out.push(t); return out; };
@@ -748,7 +893,10 @@ if (KIND === 'compare') {
     const sub = nums(m) || Object.values(m.meta || {}).slice(0, 3).join(' · ');
     if (sub) t.append(h('div', 'nums', sub));
     const eq = h('span', 'eq'); eq.innerHTML = '<i></i><i></i><i></i>';
-    card.append(h('span', 'n', String(mi + 1)), t, eq, voteBtns(gi, mi));
+    if (m.stems) { const lo = lowEnd(m); if (lo) t.append(lo); }
+    card.append(h('span', 'n', String(mi + 1)), t, eq);
+    if (m.stems) card.append(stemBtn(gi, mi));
+    card.append(voteBtns(gi, mi));
     card.tabIndex = 0; card.setAttribute('role', 'button');
     card.addEventListener('click', () => select(gi, mi, false, true));
     card.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === card) { e.preventDefault(); card.click(); } });
@@ -802,8 +950,10 @@ if (KIND === 'compare') {
         b.addEventListener('click', () => { if (m.src) select(gi, mi, true); });
       } else {
         const tl = h('div', 'tl'); tl.append(h('span', 'n', String(mi + 1)), h('span', 'lbl', m.label), eq);
+        if (m.stems) tl.append(stemBtn(gi, mi));
         b.append(tl, m.src ? canvas(gi, mi, true) : h('div', 'local', 'Reference · plays on the sharer’s machine'));
         const nm = nums(m); if (nm) b.append(h('div', 'nums', nm));
+        const lo = lowEnd(m); if (lo) b.append(lo);
         if (m.chip && m.chip.text) b.append(h('span', `chip ${m.chip.tone || ''}`, m.chip.text));
         const tf = h('div', 'tf'); tf.append(h('span', 'dur', m.secs ? `${(+m.secs).toFixed(1)} s` : ''), voteBtns(gi, mi));
         b.append(tf);
@@ -853,6 +1003,7 @@ function sheet() {
   if (m.role) facts.push(['role', m.role]);
   if (m.secs) facts.push(['length', `${(+m.secs).toFixed(2)} s`]);
   if (m.lufs != null) facts.push(['loudness', `${m.lufs.toFixed(1)} LUFS`]);
+  if (m.stems) m.stems.forEach(st => { if (st.share != null) facts.push([st.stem, `${pct(st.share)} of the loudness${st.lufs != null && st.lufs > -69 ? ` · ${st.lufs.toFixed(1)} LUFS` : ''}`]); });
   Object.entries(m.numbers || {}).forEach(([k, v]) => facts.push([(D.labels || {})[k] || k, typeof v === 'number' ? +v.toFixed(3) : v]));
   kv('Numbers', facts);
   kv('What made it', Object.entries(m.meta || {}));
@@ -877,6 +1028,7 @@ function changed() {
   // The compare spectrogram follows the take you hear; one without a spectrogram leaves it dark.
   $$('.specrow').forEach(r => { const m = D.groups[0].members[P.active]; $('canvas', r).dataset.m = m && m.spec ? P.active : -1; $('b', r).textContent = m ? (split(m.label)[0] || String(P.active + 1)) : ''; });
   sheet();
+  renderLanes();
   draw();
 }
 const lvl = new Uint8Array(512);
@@ -891,7 +1043,8 @@ function draw() {
   $('#bar').style.width = `${f}%`; $('#knob').style.left = `${f}%`;
   const sc = $('#sheetClock'); if (sc) sc.textContent = fmt(t);
   if (analyser && P.playing) { analyser.getByteTimeDomainData(lvl); let pk = 0; for (const v of lvl) pk = Math.max(pk, Math.abs(v - 128)); $('#level').style.width = `${Math.min(100, pk / 128 * 140)}%`; } else $('#level').style.width = '0';
-  $$('canvas.wave').forEach(paintWave);
+  $$('canvas.wave:not(.lanec)').forEach(paintWave);
+  $$('canvas.lanec').forEach(paintLane);
   $$('.tile, .pad, .strip').forEach(r => r.classList.toggle('playing', P.playing && P.g === +r.dataset.g && P.active === +r.dataset.m));
   $$('.pad').forEach(p => { const on = P.playing && P.g === +p.dataset.g && P.active === +p.dataset.m; const mm = D.groups[+p.dataset.g].members[+p.dataset.m]; $('.fill', p).style.width = on ? `${Math.min(100, now() / (mm.secs || 1) * 100)}%` : '0'; });
 }
@@ -973,9 +1126,9 @@ $('#pq').addEventListener('keydown', e => {
 
 // The keys sheet, this tab's keys first.
 const K = {
-  board: ['Board', [['Previous or next group', '↑ ↓'], ['Previous or next sound', '← →'], ['Seek five seconds', '⇧← ⇧→'], ['Play a sound', '1–9'], ['Replay from the start', 'R']]],
+  board: ['Board', [['Previous or next group', '↑ ↓'], ['Previous or next sound', '← →'], ['Seek five seconds', '⇧← ⇧→'], ['Play a sound', '1–9'], ['Replay from the start', 'R'], ...(HAS_STEMS ? [['Stem lanes for the sound you hear', 'T'], ['Stems or the full mix', 'A']] : [])]],
   pads: ['Pads', [['Play a pad from the top', '1–9'], ['Replay the last pad', 'R'], ['Previous or next group', '↑ ↓']]],
-  compare: ['Compare', [['Switch to a file', '1–9'], ['Step a second (⇧ five)', '← →'], ['Replay from the start', 'R']]],
+  compare: ['Compare', [['Switch to a file', '1–9'], ['Step a second (⇧ five)', '← →'], ['Replay from the start', 'R'], ...(HAS_STEMS ? [['Stem lanes for the file you hear', 'T'], ['Stems or the full mix', 'A']] : [])]],
   all: ['Everywhere', [['Play or pause', 'Space'], ['Like or dislike this sound', 'L D'], ...(KIND === 'board' ? [['Write a note on it', 'N']] : []), ['Match loudness', 'M'], ['Search', '⌘K /'], ['This sheet', '?'], ['Close', 'Esc']]],
 };
 // The few keys that matter most, along the bottom of the page.
@@ -1006,6 +1159,8 @@ document.addEventListener('keydown', e => {
   else if (e.key === '?') $('#keys').classList.toggle('open');
   else if (e.key === ' ') { e.preventDefault(); toggle(); }
   else if (e.key === 'm' || e.key === 'M') setMatch(!matchOn);
+  else if ((e.key === 't' || e.key === 'T') && HAS_STEMS && KIND !== 'pads') toggleStems(g, P.g == null ? 0 : P.active);
+  else if ((e.key === 'a' || e.key === 'A') && S.on) setStemMode(!S.mode);
   else if (/^[ld]$/i.test(e.key)) { if (P.g == null) { P.g = g; changed(); } vote(P.g, P.active, /l/i.test(e.key) ? 1 : -1); }
   else if ((e.key === 'n' || e.key === 'N') && $('#noteIn')) { e.preventDefault(); $('#sheet').classList.add('open'); $('#noteIn').focus(); }
   else if (e.key === 'r' || e.key === 'R') select(g, P.g == null ? 0 : P.active, true);
@@ -1023,7 +1178,7 @@ document.addEventListener('keydown', e => {
     else seek(g, now() + d * (e.shiftKey ? 5 : KIND === 'compare' ? 1 : 2));
   }
 });
-window.addEventListener('resize', draw);
+window.addEventListener('resize', () => { if (S.on) renderLanes(); draw(); });
 $('#copyVotes').addEventListener('click', copyVotes);
 changed();
 connect();

@@ -13,6 +13,7 @@ mod scenes;
 mod share;
 mod shot;
 mod source;
+mod stems;
 mod ui;
 
 use rune::{AppSpec, Chrome};

@@ -49,6 +49,8 @@ const BOARD: Section = (
         ("R", "Replay from the start"),
         ("L", "Loop what the strip shows"),
         ("Z", "Zoom to the sound"),
+        ("T", "Stem lanes for the one you hear"),
+        ("A", "Stems or the full mix"),
         ("K D", "Keep or drop"),
         ("↵", "Pick"),
         ("Esc", "Hide or show the pane"),

@@ -35,6 +35,8 @@ enum Cmd {
     Pause,
     Seek(u64),
     Active(usize),
+    /// Several heard at once (a track's stems), each at its own level; `None` is back to one.
+    Mix(Option<Vec<f32>>),
     Trims(Vec<f32>),
     Loop(Option<(u64, u64)>),
     /// A selection: play stops at its end (unless a loop is set).
@@ -87,6 +89,8 @@ pub struct Mixer {
     /// Decodes in flight: (set, result).
     decoding: Option<(u64, Receiver<Decoded>)>,
     pub active: usize,
+    /// Per-track levels when more than one is heard (stems); `None` hears just `active`.
+    pub mix: Option<Vec<f32>>,
     pub loop_frames: Option<(u64, u64)>,
     /// The selection, in frames: play starts at its start and stops at its end.
     pub range_frames: Option<(u64, u64)>,
@@ -132,6 +136,7 @@ impl Default for Mixer {
             next_set: 1,
             decoding: None,
             active: 0,
+            mix: None,
             loop_frames: None,
             range_frames: None,
             want_play: false,
@@ -225,6 +230,7 @@ impl Mixer {
         self.pending_seek = None;
         self.frames = 0;
         self.active = 0;
+        self.mix = None;
         self.loop_frames = None;
         self.range_frames = None;
         self.shared.pos.store(0, Ordering::Release);
@@ -358,6 +364,16 @@ impl Mixer {
         self.send(Cmd::Active(i));
     }
 
+    /// Hears several tracks at once at these levels (stems, soloed and muted), or just the
+    /// active one again with `None`. Levels move over the switch's crossfade, so nothing clicks.
+    pub fn set_mix(&mut self, mix: Option<Vec<f32>>) {
+        if self.mix == mix {
+            return;
+        }
+        self.mix.clone_from(&mix);
+        self.send(Cmd::Mix(mix));
+    }
+
     /// Linear gains per member.
     pub fn set_trims(&mut self, trims: Vec<f32>) {
         self.send(Cmd::Trims(trims));
@@ -410,6 +426,7 @@ impl Mixer {
                     self.error = None;
                     self.send(Cmd::Load { set, tracks });
                     self.send(Cmd::Active(self.active));
+                    self.send(Cmd::Mix(self.mix.clone()));
                     if let Some(p) = self.pending_seek.take() {
                         self.seek_secs(p);
                     }
@@ -483,6 +500,7 @@ impl Mixer {
 struct State {
     tracks: Vec<Arc<Vec<f32>>>,
     gains: Vec<f32>,
+    mix: Option<Vec<f32>>,
     trims: Vec<f32>,
     active: usize,
     pos: u64,
@@ -516,6 +534,7 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
     let st = Mutex::new(State {
         tracks: Vec::new(),
         gains: Vec::new(),
+        mix: None,
         trims: Vec::new(),
         active: 0,
         pos: 0,
@@ -559,6 +578,7 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                     s.reset_grains();
                 }
                 Cmd::Active(i) => s.active = i,
+                Cmd::Mix(m) => s.mix = m,
                 Cmd::Trims(t) => s.trims = t,
                 Cmd::Loop(l) => s.looping = l,
                 Cmd::Range(r) => s.range = r,
@@ -583,7 +603,10 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
             let (mut l, mut r) = (0f32, 0f32);
             let (taps, nt) = s.taps();
             for i in 0..n {
-                let target = if i == s.active { 1.0 } else { 0.0 };
+                let target = match &s.mix {
+                    Some(m) => m.get(i).copied().unwrap_or(0.0),
+                    None => f32::from(u8::from(i == s.active)),
+                };
                 let g = s.gains[i] + (target - s.gains[i]).clamp(-step, step);
                 s.gains[i] = g;
                 if g <= 0.0 {
@@ -775,6 +798,7 @@ mod tests {
         State {
             tracks: Vec::new(),
             gains: Vec::new(),
+            mix: None,
             trims: Vec::new(),
             active: 0,
             pos: 0,

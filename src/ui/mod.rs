@@ -134,11 +134,7 @@ fn titlebar(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> El {
         let share = if s.sharing {
             row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(9.0).build(k)).child(px::label("Sharing"))
         } else {
-            row()
-                .gap(6.0)
-                .center_y()
-                .child(rune::icon(&icons::SHARE, 13.0).color(px::SOFT))
-                .child(text("SHARE").font(px::pixel(11.0)).color(px::SOFT))
+            row().gap(6.0).center_y().child(rune::icon(&icons::SHARE, 13.0).color(px::SOFT)).child(text("SHARE").font(px::pixel(11.0)).color(px::SOFT))
         };
         trailing = trailing.child(
             row()
@@ -533,6 +529,8 @@ fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
                 'd' => s.decide_active("drop"),
                 'b' => s.toggle_blind(),
                 'm' => s.toggle_loudness_match(),
+                't' => s.toggle_stems_active(),
+                'a' => s.toggle_stem_mode(),
                 _ => return false,
             }
         }

@@ -262,7 +262,8 @@ fn screenshot(args: &Value, ctx: &Ctx) -> Result<Vec<u8>, String> {
 fn share_tab(args: &Value, ctx: &Ctx) -> Result<Value, String> {
     let v = ctx.ui("_export", args.clone())?;
     let files: Vec<(PathBuf, String)> = serde_json::from_value(v["files"].clone()).map_err(|e| e.to_string())?;
-    let x = crate::share::Export { title: v["title"].as_str().unwrap_or("adeck").to_owned(), page: v["page"].clone(), files };
+    let stems: Vec<(PathBuf, String)> = serde_json::from_value(v["stems"].clone()).unwrap_or_default();
+    let x = crate::share::Export { title: v["title"].as_str().unwrap_or("adeck").to_owned(), page: v["page"].clone(), files, stems };
     let sh = crate::share::publish(x, &ctx.cfg.share, &ctx.cfg.aws)?;
     ctx.ui("_shared", serde_json::to_value(&sh).map_err(|e| e.to_string())?)?;
     Ok(json!({"url": sh.url, "slug": sh.slug, "files": sh.files}))
@@ -450,8 +451,14 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "play",
-            "Play a tab (the front one by default), optionally a board group, a member (index into the group's members then its rest) and a start time.",
-            json!({"tab_id": tab, "group": {"type": "string"}, "member": {"type": "integer"}, "at_s": {"type": "number"}}),
+            "Play a tab (the front one by default), optionally a board group, a member (index into the group's members then its rest) and a start time. On a board, stems: true opens that member's stem lanes and plays the stems (splitting it first if need be); solo names the stems to hear alone, e.g. [\"bass\"].",
+            json!({"tab_id": tab, "group": {"type": "string"}, "member": {"type": "integer"}, "at_s": {"type": "number"}, "stems": {"type": "boolean"}, "solo": {"type": "array", "items": {"type": "string", "enum": ["drums", "bass", "other", "vocals"]}}}),
+            &[],
+        ),
+        tool(
+            "split_stems",
+            "Split tracks into stems (drums, bass, other, vocals) with Demucs, in the background, once per track; the stems land beside each track in <name>.stems/ with each stem's loudness and share. Defaults to every track on the tab. The user then opens them as lanes under a board tile (solo, mute, A/B against the mix), and shared pages carry them. list_tabs shows each member's stem levels once split.",
+            json!({"tab_id": tab, "items": items}),
             &[],
         ),
         tool("stop", "Pause playback.", json!({}), &[]),

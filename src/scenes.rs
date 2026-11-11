@@ -24,12 +24,14 @@ pub const ALL: &[Scene] = &[
     ("palette-search", palette_search),
     ("board-search", board_search),
     ("keys", keys),
+    ("stems", stems),
 ];
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
     let dir = std::env::temp_dir().join("adeck-fixtures/run-a");
     if dir.join("tick.wav").is_file() {
+        fixture_stems(&dir);
         return dir;
     }
     let _ = std::fs::create_dir_all(&dir);
@@ -64,7 +66,32 @@ pub fn fixtures() -> PathBuf {
     meta("tone-b", "fixture-sine", "calm", 2, serde_json::json!({"steps": 50, "cfg": 7.0}));
     meta("whoosh", "fixture-noise", "whoosh-soft", 3, serde_json::json!({"flags": ["too_short"]}));
     meta("click-120", "fixture-click", "upbeat", 4, serde_json::json!({"bpm": 120}));
+    fixture_stems(&dir);
     dir
+}
+
+/// click-120 split as the splitter would: clicks on drums, a loud low sine on bass, a quiet
+/// chord on other, nothing on vocals.
+fn fixture_stems(dir: &Path) {
+    let d = crate::stems::dir_for(&dir.join("click-120.wav"));
+    if d.join("stems.json").is_file() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&d);
+    let rate = 44_100u32;
+    let tau = std::f32::consts::TAU;
+    write_wav(&d.join("drums.wav"), rate, 10.0, |t| {
+        let beat = (t * 2.0).fract();
+        if beat < 0.02 { (t * 1200.0 * tau).sin() * (1.0 - beat / 0.02) * 0.5 } else { 0.0 }
+    });
+    write_wav(&d.join("bass.wav"), rate, 10.0, |t| (t * 55.0 * tau).sin() * 0.55 * (0.6 + 0.4 * (t * tau / 2.0).cos().abs()));
+    write_wav(&d.join("other.wav"), rate, 10.0, |t| ((t * 440.0 * tau).sin() + (t * 554.0 * tau).sin() + (t * 659.0 * tau).sin()) * 0.05 * ((t * 0.5).fract() < 0.75) as u8 as f32);
+    write_wav(&d.join("vocals.wav"), rate, 10.0, |_| 0.0);
+    let levels = serde_json::json!({"mix_lufs": -14.2, "stems": {
+        "drums": {"lufs": -24.0, "share": 0.09}, "bass": {"lufs": -15.1, "share": 0.69},
+        "other": {"lufs": -20.4, "share": 0.21}, "vocals": {"lufs": -70.0, "share": 0.0}}});
+    let meta = serde_json::json!({"version": 1, "model": "htdemucs_ft", "source": "click-120.wav", "stems": crate::stems::NAMES, "levels": levels});
+    let _ = std::fs::write(d.join("stems.json"), serde_json::to_vec_pretty(&meta).unwrap_or_default());
 }
 
 fn env(t: f32, secs: f32) -> f32 {
@@ -181,6 +208,17 @@ pub fn board_args() -> serde_json::Value {
 fn board(s: &mut App) {
     reset(s);
     let _ = s.call("open_board", &board_args());
+    s.settle_now();
+}
+
+/// A board with the stem lanes open under a track, the bass soloed.
+fn stems(s: &mut App) {
+    reset(s);
+    let _ = s.call("open_board", &board_args());
+    s.settle_now();
+    s.toggle_stems("ui-click", 1);
+    s.settle_now();
+    s.stem_press(1, false);
     s.settle_now();
 }
 
@@ -754,6 +792,53 @@ mod tests {
         assert_eq!(rt.state.mixer.speed, 2.0);
         click(&mut rt, "speed");
         assert_eq!(rt.state.mixer.speed, 1.0);
+    }
+
+    #[test]
+    fn stem_lanes_open_under_a_tile_solo_and_close_with_t() {
+        let mut rt = rt(board);
+        let click = |rt: &mut Runtime<App>, key: &str| {
+            let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}")).target;
+            rt.pointer_down(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+            rt.pointer_up(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+            rt.frame(1.0 / 60.0);
+        };
+        let has = |rt: &mut Runtime<App>, key: &str| rt.elements().iter().any(|e| e.key.as_deref() == Some(key) && !e.exiting);
+        // The click track has stems on disk: its tile's key opens them under its row.
+        click(&mut rt, "stems-ui-click-1");
+        rt.state.settle_now();
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        let t = rt.state.current().unwrap();
+        assert_eq!((t.spec.group.as_deref(), t.active, t.stems_open, t.stem_mode), (Some("ui-click"), 1, true, true));
+        assert!(rt.state.open_stems(t).is_some_and(|st| st.bass_share() == Some(0.69)));
+        for k in ["lanes-ui-click", "lane-row-drums", "lane-row-vocals", "ab-mix", "solo-bass", "mute-other"] {
+            assert!(has(&mut rt, k), "{k}");
+        }
+        // Each stem resolved and analysed, so its lane has a waveform.
+        let files = rt.state.open_stems(rt.state.current().unwrap()).unwrap().files.clone();
+        assert!(files.iter().all(|p| rt.state.entry(&crate::app::stem_id(p)).is_some_and(|e| e.analysis.is_some())));
+        // (The lanes sit below this window's fold, so these go through the app.)
+        rt.state.stem_press(1, false);
+        rt.state.set_stem_mode(false);
+        let t = rt.state.current().unwrap();
+        assert_eq!((t.stem_solo, t.stem_mode), ([false, true, false, false], false));
+        rt.state.stem_press(0, false);
+        assert!(rt.state.current().unwrap().stem_mode, "a solo puts you back on the stems");
+        rt.on_key = Some(crate::ui::on_key);
+        rt.key(rune::KeyEvent { key: rune::Key::Text("t".into()), mods: rune::Mods::default() });
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert!(!rt.state.current().unwrap().stems_open);
+        assert!(!has(&mut rt, "lane-row-bass"));
+        // A tile with no stems (and no splitter, headless) opens to the offer to split.
+        click(&mut rt, "stems-ui-click-0");
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert!(has(&mut rt, "split-one"));
     }
 
     #[test]

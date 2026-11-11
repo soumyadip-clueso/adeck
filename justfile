@@ -27,7 +27,7 @@ snap SCENE OUT="target/snaps":
 
 # Every scene, into target/snaps/.
 snaps:
-    for s in empty single compare blind run board pads diff shared activity palette keys; do just snap $s; done
+    for s in empty single compare blind run board pads diff shared activity palette keys stems; do just snap $s; done
 
 # The README's screenshots, at 2x, into docs/images/.
 screenshots:

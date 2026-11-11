@@ -43,6 +43,8 @@ pub struct Export {
     pub page: Value,
     /// (local file, name in the page). The page refers to each by name.
     pub files: Vec<(PathBuf, String)>,
+    /// Members' stems, four per track in order, named like `files`.
+    pub stems: Vec<(PathBuf, String)>,
 }
 
 fn store() -> PathBuf {
@@ -96,6 +98,37 @@ pub fn publish(x: Export, cfg: &ShareCfg, aws: &str) -> Result<Share, String> {
             fill(&mut page, name, &facts);
         }
     }
+    // Stems, a track's four at a time, until the page carries `stems_mb` of them; the rest of
+    // the tracks go without.
+    let mut stem_bytes = 0u64;
+    let mut over = false;
+    for set in x.stems.chunks(4) {
+        if !over {
+            let mut made = Vec::new();
+            for (src, name) in set {
+                let (out_name, out) = web_stem(src, name, &dir.join("audio"))?;
+                stem_bytes += std::fs::metadata(&out).map_or(0, |m| m.len());
+                made.push((name.clone(), out_name, out));
+            }
+            if stem_bytes <= cfg.stems_mb << 20 {
+                for (name, out_name, _) in made {
+                    if let Some(f) = facts_light(&set.iter().find(|(_, n)| *n == name).map(|(p, _)| p.clone()).unwrap_or_default()) {
+                        fill(&mut page, &name, &f);
+                    }
+                    names.insert(name, Value::String(out_name));
+                }
+                continue;
+            }
+            over = true;
+            for (_, _, out) in made {
+                let _ = std::fs::remove_file(out);
+            }
+            eprintln!("adeck: stems past {} MB left off the page", cfg.stems_mb);
+        }
+        if let Some((_, first)) = set.first() {
+            drop_stems(&mut page, first);
+        }
+    }
     let s3_base = if cfg.audio == "s3" {
         let s3 = &cfg.s3;
         if s3.bucket.is_empty() || s3.public_url.is_empty() {
@@ -138,6 +171,49 @@ fn facts(src: &Path) -> Option<Value> {
     Some(facts)
 }
 
+/// A stem's waveform and length for the page: no spectrogram or bar lines, which the track
+/// already has.
+fn facts_light(src: &Path) -> Option<Value> {
+    let a = crate::derive::analyse(src).ok()?;
+    Some(serde_json::json!({"secs": a.secs, "peaks": peaks(&a.envelope, 700), "rms": rms(&a.envelope, 700)}))
+}
+
+/// Takes the stems off the member whose first stem is `first`.
+fn drop_stems(v: &mut Value, first: &str) {
+    match v {
+        Value::Object(m) => {
+            if m.get("stems").and_then(|s| s.get(0)).and_then(|s| s.get("src")).and_then(Value::as_str) == Some(first) {
+                m.remove("stems");
+                m.remove("stem_model");
+                return;
+            }
+            m.values_mut().for_each(|x| drop_stems(x, first));
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| drop_stems(x, first)),
+        _ => {}
+    }
+}
+
+/// A stem as VBR MP3 (about 130 kbps; a silent stem costs next to nothing). Every stem goes
+/// through the same encoder, so their start padding matches and they stay in step.
+fn web_stem(src: &Path, name: &str, dir: &Path) -> Result<(String, PathBuf), String> {
+    let out_name = format!("{name}.mp3");
+    let out = dir.join(&out_name);
+    let ok = Command::new(ffmpeg())
+        .args(["-y", "-loglevel", "error", "-i"])
+        .arg(src)
+        .args(["-vn", "-c:a", "libmp3lame", "-q:a", "5"])
+        .arg(&out)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if ok { Ok((out_name, out)) } else { Err(format!("Couldn't encode the stem {} for the web (needs ffmpeg).", src.display())) }
+}
+
+/// ffmpeg: on the PATH, or Homebrew's when the app was opened from the Dock.
+fn ffmpeg() -> PathBuf {
+    ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].iter().map(PathBuf::from).find(|p| p.is_file()).unwrap_or_else(|| "ffmpeg".into())
+}
+
 /// Puts a published share on this build's page: its data is read back from the copy kept in the
 /// cache, each file's screens are worked out again from the audio (the bundled copy, or the
 /// local file behind a `[[share.links]]` URL), and it's published again under the same slug, so
@@ -163,9 +239,10 @@ pub fn refresh(sh: &Share, cfg: &ShareCfg) -> Result<usize, String> {
 fn refill(v: &mut Value, dir: &Path, links: &[config::ShareLink], fresh: &mut usize) {
     match v {
         Value::Object(m) => {
+            let light = m.contains_key("stem");
             if let Some(src) = m.get("src").and_then(Value::as_str)
                 && let Some(path) = local_for(src, dir, links)
-                && let Some(Value::Object(f)) = facts(&path)
+                && let Some(Value::Object(f)) = if light { facts_light(&path) } else { facts(&path) }
             {
                 m.extend(f);
                 *fresh += 1;
@@ -359,10 +436,7 @@ fn url_part(s: &str) -> String {
 
 /// The files the link folders' URLs really serve (HEAD 200, same size), by page name. The rest get copied.
 fn linked_urls(files: &[(PathBuf, String)], links: &[config::ShareLink]) -> std::collections::HashMap<String, String> {
-    let todo: Vec<(&String, String, u64)> = files
-        .iter()
-        .filter_map(|(src, name)| Some((name, link_url(src, links)?, std::fs::metadata(src).ok()?.len())))
-        .collect();
+    let todo: Vec<(&String, String, u64)> = files.iter().filter_map(|(src, name)| Some((name, link_url(src, links)?, std::fs::metadata(src).ok()?.len()))).collect();
     let out = std::sync::Mutex::new(std::collections::HashMap::new());
     std::thread::scope(|s| {
         for chunk in todo.chunks(todo.len().div_ceil(12).max(1)) {
@@ -486,7 +560,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("adeck-share-test-{}", std::process::id()));
         std::fs::create_dir_all(root.join("run")).unwrap();
         std::fs::write(root.join("run/a b.mp3"), b"x").unwrap();
-        let links = [config::ShareLink { dir: root.join("other"), url: "https://cdn.example/runs/".into() }, config::ShareLink { dir: root.join("run"), url: "https://cdn.example/runs/".into() }];
+        let links = [
+            config::ShareLink { dir: root.join("other"), url: "https://cdn.example/runs/".into() },
+            config::ShareLink { dir: root.join("run"), url: "https://cdn.example/runs/".into() },
+        ];
         assert_eq!(local_for("https://cdn.example/runs/a%20b.mp3", Path::new("/nowhere"), &links), Some(root.join("run/a b.mp3")));
         assert_eq!(local_for("https://cdn.example/runs/missing.mp3", Path::new("/nowhere"), &links), None);
         assert_eq!(local_for("run/a b.mp3", &root, &links), Some(root.join("run/a b.mp3")));

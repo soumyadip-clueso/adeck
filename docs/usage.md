@@ -42,6 +42,23 @@ Tabs come back when you reopen adeck. **+** after the tabs (⌘T) opens a file (
 - **Zoom**: − and + (or = and −) zoom around the playhead, F fits the file or the loop, [ and ] pan. A zoomed view follows the playhead while it plays.
 - **Volume**: drag across the bars in the player.
 
+## Stems
+
+A track can be split into drums, bass, other and vocals, to hear and see each part on its own. Vocals are there as a check: a generated bed shouldn't have any, so a tile flags a vocals stem over 5%.
+
+- **Split**: Stems on a board tile splits that track; the board header's Stems key splits every track on the board; the agent can call `split_stems`. Splitting runs [Demucs](https://github.com/adefossez/demucs) (`htdemucs_ft`) on your Mac through [uv](https://docs.astral.sh/uv/), about 15 seconds a minute of audio on an M-series Mac, once per track. The stems go beside the track in `<name>.stems/` (FLAC, the track's own rate and length) with `stems.json`: the model, and each stem's loudness and share of the track's loudness.
+- **Lanes**: Stems (or T) opens lanes under the row of the track you're hearing: a waveform per stem on one decibel scale, so loud parts look loud next to quiet ones, each with S (solo) and M (mute). The stems play on the board's transport, sample-locked to the mix, so a solo or a mute is just a level change.
+- **A/B**: MIX and STEMS (or A) switch between the full mix and the stems summed. With nothing soloed or muted, what differs is the separation's artefacts.
+- **Low end**: each tile shows the bass stem's share of the track's loudness (K-weighted energy over the whole track), amber at 40% and up.
+
+```toml
+[stems]
+model = "htdemucs_ft"   # or "htdemucs": about twice as fast, a little worse
+# uv = "/path/to/uv"    # found in ~/.local/bin, ~/.cargo/bin or Homebrew otherwise
+```
+
+Demucs's code is MIT; its weights download on first use and are never bundled (their licence is unclear upstream).
+
 ## Telling the agent
 
 - **Send to agent**: double-click a strip, a tile or a compare member, or press S. The agent gets what you're on (the tab, group, take, the loop or selection, the playhead and your note) through `get_selection`, and a line is copied for you to paste into the chat.
@@ -76,6 +93,8 @@ url = "https://cdn.example.com/runs/run-12/"
 ```
 
 A big board with linked files shares fine; bundled audio is limited by what your host accepts.
+
+Tracks with stems share them too: the page gets the same lanes, solo, mute and A/B, on the same clock. Stems go up as VBR MP3 (about 3.5 MB for a minute's four), bundled or to S3 like the rest, until a page carries `stems_mb` of them (default 160, under `[share]`); tracks past that are shared without.
 
 ## Keyboard
 

@@ -48,11 +48,17 @@ const UNLIT: [u8; 4] = [255, 255, 255, 12];
 /// The waveform as an LED screen: each column of dots lit to the peak (grey) with the loudness
 /// core brighter, unlit dots faintly there. Straight-alpha RGBA, `w`×`h`.
 pub fn paint_wave(env: &[[f32; 3]], w: usize, h: usize) -> Vec<u8> {
+    paint_wave_at(env, w, h, None)
+}
+
+/// `paint_wave` scaled to `peak` instead of the file's own, so pictures drawn at one peak (a
+/// track's stems) keep their sizes relative to each other.
+pub fn paint_wave_at(env: &[[f32; 3]], w: usize, h: usize, peak: Option<f32>) -> Vec<u8> {
     let mut px = vec![0u8; w * h * 4];
     if env.is_empty() || w == 0 || h == 0 {
         return px;
     }
-    let peak = env.iter().fold(0f32, |m, c| m.max(c[0].abs()).max(c[1].abs())).max(1e-6);
+    let peak = peak.unwrap_or_else(|| env.iter().fold(0f32, |m, c| m.max(c[0].abs()).max(c[1].abs()))).max(1e-6);
     // Quiet files still fill most of the screen, as a DAW's normalised view does.
     let gain = (0.92 / peak).min(64.0);
     let cell = cell_for(h);
@@ -259,6 +265,58 @@ pub fn tile_picture(e: &Entry, range: Option<(f64, f64)>, width: f32, height: f3
         e.tile_key.set(key);
     }
     el().absolute(0.0, 0.0).w(width).h(height).pixels(&e.tile_px).inert()
+}
+
+/// How many dB below the loudest stem a lane still shows.
+const LANE_DB: f32 = 48.0;
+
+/// An envelope on a decibel scale against `peak`: `peak` is full height, `LANE_DB` below it is
+/// nothing. Sustained parts (a bass line) stay readable beside transient ones (a drum hit).
+fn log_env(env: &[[f32; 3]], peak: f32) -> Vec<[f32; 3]> {
+    let f = |v: f32| (1.0 + 20.0 * (v.abs().max(1e-9) / peak).log10() / LANE_DB).clamp(0.0, 1.0);
+    env.iter().map(|c| [-f(c[0]), f(c[1]), f(c[2])]).collect()
+}
+
+/// A stem's lane: its waveform over the window the strips show, on one decibel scale for all a
+/// track's stems (`peak` is the loudest) so a quiet part looks quiet next to a loud one, with
+/// the loop and the playhead. Dimmed when you can't hear it. Press or drag to scrub.
+#[allow(clippy::too_many_arguments)]
+pub fn lane_strip(s: &App, tab: &Tab, e: Option<&Entry>, key: &str, width: f32, height: f32, peak: f32, dim: bool, k: &Kit) -> El {
+    let mut strip = el().key(key.to_owned()).instant_changes().w_full().h(height).radius(3.0).fill(screen()).clip_rounded(3.0).cursor(rune::Cursor::Pointer);
+    let Some(e) = e else {
+        return strip.child(loading("Opening…", k));
+    };
+    let Some(a) = &e.analysis else {
+        let why = e.failed.clone().unwrap_or_else(|| "Analysing…".into());
+        return strip.child(loading(&why, k));
+    };
+    let (lo, hi) = s.window(tab);
+    let sc = scale();
+    let (w, h) = (((width * sc).round() as u32).clamp(16, 6000), ((height * sc).round() as u32).clamp(8, 1600));
+    let key4 = (w, h, (lo * 1000.0) as u64, (hi * 1000.0) as u64, peak.to_bits());
+    if e.lane_key.get() != key4 {
+        let n = a.envelope.len();
+        let ca = if a.secs > 0.0 { ((lo / a.secs) * n as f64).floor().max(0.0) as usize } else { 0 };
+        let cb = if a.secs > 0.0 { (((hi / a.secs) * n as f64).ceil() as usize).min(n) } else { n };
+        if cb > ca {
+            // Past the end of the file (a longer member sets the window): just the part there is.
+            let frac = (((a.secs.min(hi) - lo) / (hi - lo).max(1e-6)).clamp(0.0, 1.0) * f64::from(w)) as u32;
+            let mut px = vec![0u8; (w * h * 4) as usize];
+            let part = paint_wave_at(&log_env(&a.envelope[ca..cb], peak), frac.max(1) as usize, h as usize, Some(1.0));
+            for y in 0..h as usize {
+                let (dst, src) = (y * w as usize * 4, y * frac.max(1) as usize * 4);
+                px[dst..dst + frac.max(1) as usize * 4].copy_from_slice(&part[src..src + frac.max(1) as usize * 4]);
+            }
+            e.lane_px.set(w, h, px);
+        }
+        e.lane_key.set(key4);
+    }
+    strip = strip.child(el().absolute(0.0, 0.0).w(width).h(height).pixels(&e.lane_px).inert());
+    if dim {
+        strip = strip.child(el().absolute(0.0, 0.0).w_full().h_full().fill(screen().alpha(0.72)).inert());
+    }
+    strip = overlays(strip, s, tab, width, height, (lo, hi), k);
+    scrub_handler(strip, lo, hi)
 }
 
 /// The loop region and the playhead over a strip.
