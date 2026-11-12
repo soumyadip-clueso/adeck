@@ -5,7 +5,7 @@
 //! comes back through `events`, drained in `poll`. MCP tool calls arrive on their own channel
 //! and are answered from `poll` too, so a tool sees exactly what the window shows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -90,8 +90,28 @@ pub struct StemView {
     pub member: usize,
     /// Hearing the stems (true) or the full mix.
     pub mode: bool,
-    pub solo: [bool; 4],
-    pub mute: [bool; 4],
+    /// Which of the track's stem sets (`Stems::key`): "" is `<name>.stems`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub set: String,
+    #[serde(default, deserialize_with = "stem_names")]
+    pub solo: BTreeSet<String>,
+    #[serde(default, deserialize_with = "stem_names")]
+    pub mute: BTreeSet<String>,
+}
+
+/// Soloed or muted stems by name; sessions from before 6-stem sets kept four flags (drums,
+/// bass, other, vocals).
+fn stem_names<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeSet<String>, D::Error> {
+    let v = Value::deserialize(d)?;
+    let Value::Array(a) = v else { return Ok(BTreeSet::new()) };
+    Ok(a.iter()
+        .enumerate()
+        .filter_map(|(i, x)| match x {
+            Value::String(n) => Some(n.clone()),
+            Value::Bool(true) => crate::stems::FOUR.get(i).map(|n| (*n).to_owned()),
+            _ => None,
+        })
+        .collect())
 }
 
 fn yes() -> bool {
@@ -137,9 +157,11 @@ pub struct Tab {
     pub stems_open: bool,
     /// Hearing the stems (summed, soloed, muted) rather than the full mix: the A/B.
     pub stem_mode: bool,
-    /// Drums, bass, other, vocals.
-    pub stem_solo: [bool; 4],
-    pub stem_mute: [bool; 4],
+    /// Which stem set the lanes show, when a track has more than one (`Stems::key`).
+    pub stem_set: String,
+    /// Soloed and muted stems, by name, so they carry across sets and tracks.
+    pub stem_solo: BTreeSet<String>,
+    pub stem_mute: BTreeSet<String>,
 }
 
 impl Tab {
@@ -172,8 +194,9 @@ impl Tab {
             scrub_resume: None,
             stems_open: sv.is_some(),
             stem_mode: sv.as_ref().is_none_or(|v| v.mode),
-            stem_solo: sv.as_ref().map_or([false; 4], |v| v.solo),
-            stem_mute: sv.as_ref().map_or([false; 4], |v| v.mute),
+            stem_set: sv.as_ref().map(|v| v.set.clone()).unwrap_or_default(),
+            stem_solo: sv.as_ref().map(|v| v.solo.clone()).unwrap_or_default(),
+            stem_mute: sv.as_ref().map(|v| v.mute.clone()).unwrap_or_default(),
         }
     }
     pub fn id(&self) -> u64 {
@@ -395,8 +418,8 @@ pub struct App {
     pub scores: HashMap<String, i64>,
     /// The latest keep/drop/move on each item.
     pub decisions: HashMap<String, String>,
-    /// Stems on disk, by item id.
-    pub stems: HashMap<String, crate::stems::Stems>,
+    /// Stem sets on disk, by item id: `<name>.stems/` first, then any `<name>.stems-*/`.
+    pub stems: HashMap<String, Vec<crate::stems::Stems>>,
     /// Tracks queued for or being split.
     pub splitting: HashSet<PathBuf>,
     waker: Option<Waker>,
@@ -812,12 +835,11 @@ impl App {
             let sp: Option<Vec<(String, PathBuf)>> = st.files.iter().map(|p| self.items.get(&stem_id(p)).map(|e| (stem_id(p), e.item.path.clone()))).collect();
             paths.extend(sp.unwrap_or_default());
         }
-        // Stems coming or going, members unchanged: keep the place and keep playing.
-        let carry = self
-            .mixer
-            .loaded
-            .as_ref()
-            .is_some_and(|(o, ids)| *o == tab && ids.len() >= n && ids.len() != paths.len() && ids[..n].iter().zip(&paths[..n]).all(|(a, (b, _))| a == b));
+        // Stems coming, going or swapped for another set, members unchanged: keep the place and
+        // keep playing.
+        let carry = self.mixer.loaded.as_ref().is_some_and(|(o, ids)| {
+            *o == tab && ids.len() >= n && ids[..n].iter().zip(&paths[..n]).all(|(a, (b, _))| a == b) && !ids[n..].iter().eq(paths[n..].iter().map(|(b, _)| b))
+        });
         let (at, was) = (self.mixer.secs(), self.mixer.is_playing() || self.mixer.wants_play());
         self.mixer.load(tab, paths);
         if carry {
@@ -838,13 +860,21 @@ impl App {
         if !t.stems_open || t.board().is_none_or(Board::is_pads) {
             return None;
         }
-        self.stems.get(t.spec.items.get(t.active)?)
+        self.stem_set(t, t.spec.items.get(t.active)?)
+    }
+
+    /// The stem set a tab shows for an item: the one picked on the tab, else its first.
+    pub fn stem_set(&self, t: &Tab, id: &str) -> Option<&crate::stems::Stems> {
+        let sets = self.stems.get(id)?;
+        sets.iter().find(|s| s.key == t.stem_set).or_else(|| sets.first())
     }
 
     /// Whether the mixer has the open stems loaded after the members (so the lanes can play).
     pub fn stems_loaded(&self, t: &Tab) -> bool {
         let n = slots(t).len();
-        self.mixer_is_for(t.id()) && self.open_stems(t).is_some() && self.mixer.loaded.as_ref().is_some_and(|(_, ids)| ids.len() == n + 4)
+        let Some(st) = self.open_stems(t) else { return false };
+        self.mixer_is_for(t.id())
+            && self.mixer.loaded.as_ref().is_some_and(|(_, ids)| ids.len() == n + st.files.len() && ids[n..].iter().zip(&st.files).all(|(a, p)| *a == stem_id(p)))
     }
 
     /// The A/B and solo/mute as mixer levels: the stems at their gains and the members silent,
@@ -852,7 +882,7 @@ impl App {
     pub fn apply_mix(&mut self) {
         // Keep the lanes' state with the tab, for the session and screenshots.
         if let Some(t) = self.current_mut() {
-            let v = t.stems_open.then_some(StemView { member: t.active, mode: t.stem_mode, solo: t.stem_solo, mute: t.stem_mute });
+            let v = t.stems_open.then(|| StemView { member: t.active, mode: t.stem_mode, set: t.stem_set.clone(), solo: t.stem_solo.clone(), mute: t.stem_mute.clone() });
             if t.spec.stems != v {
                 t.spec.stems = v;
                 self.dirty = true;
@@ -861,7 +891,9 @@ impl App {
         let Some(t) = self.current() else { return };
         let mix = (t.stem_mode && self.stems_loaded(t)).then(|| {
             let mut v = vec![0.0; slots(t).len()];
-            v.extend(crate::stems::gains(t.stem_solo, t.stem_mute));
+            if let Some(st) = self.open_stems(t) {
+                v.extend(crate::stems::gains(&st.names, &t.stem_solo, &t.stem_mute));
+            }
             v
         });
         self.mixer.set_mix(mix);
@@ -892,7 +924,7 @@ impl App {
         let Some(t) = self.current() else { return };
         let (tab, id) = (t.id(), t.spec.items.get(t.active).cloned());
         let Some(id) = id else { return };
-        match self.stems.get(&id).map(|st| st.files.clone()) {
+        match self.stem_set(t, &id).map(|st| st.files.clone()) {
             Some(files) => {
                 for p in &files {
                     self.ensure(tab, &stem_id(p));
@@ -925,16 +957,30 @@ impl App {
     }
 
     /// Solo (or mute, with `mute`) one stem; either puts you on the stems side of the A/B.
-    pub fn stem_press(&mut self, i: usize, mute: bool) {
+    pub fn stem_press(&mut self, name: &str, mute: bool) {
         if let Some(t) = self.current_mut() {
-            if mute {
-                t.stem_mute[i] ^= true;
-            } else {
-                t.stem_solo[i] ^= true;
+            let set = if mute { &mut t.stem_mute } else { &mut t.stem_solo };
+            if !set.remove(name) {
+                set.insert(name.to_owned());
             }
             t.stem_mode = true;
         }
         self.apply_mix();
+    }
+
+    /// Shows (and plays) another of the track's stem sets, by `Stems::key`; solos and mutes
+    /// carry over by name.
+    pub fn set_stem_set(&mut self, key: &str) {
+        if let Some(t) = self.current_mut() {
+            if t.stem_set == key {
+                return;
+            }
+            t.stem_set = key.to_owned();
+        }
+        self.prepare_stems();
+        self.sync_mixer();
+        self.apply_mix();
+        self.dirty = true;
     }
 
     /// Splits these items into stems in the background, skipping references, ones already
@@ -1009,7 +1055,7 @@ impl App {
         // Stems take their track's trim, so the A/B compares like with like.
         if self.stems_loaded(t) {
             let tr = t.spec.items.get(t.active).filter(|_| on).map_or(1.0, |i| mixer::trim_for(self.lufs(i), MATCH_LUFS));
-            trims.extend([tr; 4]);
+            trims.extend(std::iter::repeat_n(tr, self.open_stems(t).map_or(0, |st| st.files.len())));
         }
         self.mixer.set_trims(trims);
     }
@@ -1919,7 +1965,7 @@ impl App {
         }
         let title = crate::ui::tab_title(self, t);
         let mut files: Vec<(PathBuf, String)> = Vec::new();
-        let mut stem_files: Vec<(PathBuf, String)> = Vec::new();
+        let mut stem_files: Vec<Vec<(PathBuf, String)>> = Vec::new();
         let mut member = |id: &str, label: String, role: &str, numbers: Value, chip: Value, meta: serde_json::Map<String, Value>| {
             let e = self.items.get(id);
             let is_ref = id.starts_with("ref:") || e.is_some_and(|e| e.item.is_ref);
@@ -1935,19 +1981,22 @@ impl App {
             // A pack file's own name stays home too.
             let label = if is_ref { label.split_once(" · ").map_or_else(|| "Reference".to_owned(), |(l, _)| format!("{l} · Reference")) } else { label };
             let mut v = serde_json::json!({"label": label, "role": role, "numbers": numbers, "chip": chip, "meta": meta, "src": src});
-            // Its stems, four to a track, named after it.
-            if let (Some(base), Some(st)) = (base, self.stems.get(id)) {
-                let parts: Vec<Value> = crate::stems::NAMES
+            // Its stems (the set the tab shows), named after it.
+            if let (Some(base), Some(st)) = (base, self.stem_set(t, id)) {
+                let mut set = Vec::new();
+                let parts: Vec<Value> = st
+                    .names
                     .iter()
                     .enumerate()
                     .map(|(i, n)| {
                         let name = format!("{base}-{n}");
-                        stem_files.push((st.files[i].clone(), name.clone()));
+                        set.push((st.files[i].clone(), name.clone()));
                         serde_json::json!({"stem": n, "src": name, "lufs": st.lufs[i], "share": st.share[i]})
                     })
                     .collect();
+                stem_files.push(set);
                 v["stems"] = Value::Array(parts);
-                v["stem_model"] = serde_json::json!(st.model);
+                v["stem_model"] = serde_json::json!(st.label());
             }
             v
         };
@@ -2250,8 +2299,9 @@ impl App {
                 self.resolving.remove(&id);
                 match result {
                     Ok(item) => {
-                        if let Some(st) = crate::stems::find(&item.path) {
-                            self.stems.insert(id.clone(), st);
+                        let sets = crate::stems::find_all(&item.path);
+                        if !sets.is_empty() {
+                            self.stems.insert(id.clone(), sets);
                         }
                         self.items.insert(id.clone(), Entry::new(item));
                         // The track whose lanes were open when the session was saved.
@@ -2388,15 +2438,14 @@ impl App {
             },
             Event::Split { path, error } => {
                 self.splitting.remove(&path);
-                if error.is_none()
-                    && let Some(st) = crate::stems::find(&path)
-                {
+                let sets = crate::stems::find_all(&path);
+                if error.is_none() && !sets.is_empty() {
                     let ids: Vec<String> = self.items.iter().filter(|(_, e)| e.item.path == path).map(|(id, _)| id.clone()).collect();
                     for id in ids {
-                        self.stems.insert(id, st.clone());
+                        self.stems.insert(id, sets.clone());
                     }
                     // The one whose lanes are waiting: load its stems now.
-                    if self.current().is_some_and(|t| self.open_stems(t).is_some_and(|o| o.files == st.files)) {
+                    if self.current().is_some_and(|t| self.open_stems(t).is_some_and(|o| sets.iter().any(|s| o.files == s.files))) {
                         self.prepare_stems();
                         self.sync_mixer();
                     }
@@ -2737,25 +2786,41 @@ impl App {
                     self.seek_secs(at);
                 }
                 // Stems: open the lanes of the member playing, soloing any named.
-                let solo = ids("solo");
-                if a.get("stems").and_then(Value::as_bool).unwrap_or(!solo.is_empty()) {
+                let (solo, mute) = (ids("solo"), ids("mute"));
+                let hear = a.get("hear").and_then(Value::as_str);
+                if a.get("stems").and_then(Value::as_bool).unwrap_or(!solo.is_empty() || !mute.is_empty() || hear.is_some()) {
                     let t = self.tab(id).ok_or("No tab.")?;
                     let key = t.focused().map(|g| g.key.clone()).ok_or("stems are for board tabs")?;
                     let (m, open) = (t.active, t.stems_open);
                     if !open {
                         self.toggle_stems(&key, m);
                     }
+                    // A set by its model or folder suffix ("htdemucs_6s", "BS-Roformer-SW").
+                    if let Some(want) = a.get("stem_set").and_then(Value::as_str) {
+                        let t = self.tab(id).ok_or("No tab.")?;
+                        let sets = t.spec.items.get(t.active).and_then(|i| self.stems.get(i)).map(Vec::as_slice).unwrap_or_default();
+                        let w = want.to_lowercase();
+                        let key = sets
+                            .iter()
+                            .find(|s| s.key.to_lowercase() == w || s.label().to_lowercase() == w || s.model.as_deref().is_some_and(|m| m.to_lowercase() == w))
+                            .map(|s| s.key.clone())
+                            .ok_or_else(|| format!("No stem set {want:?}; this track has {:?}", sets.iter().map(crate::stems::Stems::label).collect::<Vec<_>>()))?;
+                        self.set_stem_set(&key);
+                    }
                     if let Some(t) = self.current_mut() {
-                        t.stem_solo = std::array::from_fn(|i| solo.iter().any(|x| x == crate::stems::NAMES[i]));
-                        t.stem_mute = [false; 4];
-                        t.stem_mode = true;
+                        t.stem_solo = solo.iter().cloned().collect();
+                        t.stem_mute = mute.iter().cloned().collect();
+                        t.stem_mode = hear != Some("mix");
                     }
                     self.apply_mix();
                 }
                 self.sync_mixer();
                 self.mixer.play();
                 self.sync_videos(true);
-                let stems = self.tab(id).filter(|t| t.stems_open).map(|t| json!({"loaded": self.stems_loaded(t), "on_disk": self.open_stems(t).is_some()}));
+                let stems = self.tab(id).filter(|t| t.stems_open).map(|t| {
+                    let st = self.open_stems(t);
+                    json!({"loaded": self.stems_loaded(t), "on_disk": st.is_some(), "set": st.map(crate::stems::Stems::label), "names": st.map(|s| &s.names)})
+                });
                 Ok(json!({ "playing": true, "tab_id": id, "loading": self.mixer.is_loading(), "stems": stems }))
             }
             "split_stems" => {
@@ -2883,9 +2948,10 @@ impl App {
                     "ready": e.is_some_and(|e| e.analysis.is_some()),
                     "lufs": e.and_then(|e| e.analysis.as_ref()).and_then(|a| a.lufs).map(|l| (l * 10.0).round() / 10.0),
                     "trim_db": self.trim_db(t, i).map(|d| (d * 10.0).round() / 10.0),
-                    "stems": self.stems.get(i).map(|st| {
-                        crate::stems::NAMES.iter().enumerate().map(|(k, n)| ((*n).to_owned(), json!({"lufs": st.lufs[k], "share": st.share[k]}))).collect::<serde_json::Map<String, Value>>()
+                    "stems": self.stem_set(t, i).map(|st| {
+                        st.names.iter().enumerate().map(|(k, n)| (n.clone(), json!({"lufs": st.lufs[k], "share": st.share[k]}))).collect::<serde_json::Map<String, Value>>()
                     }),
+                    "stem_sets": self.stems.get(i).filter(|v| v.len() > 1).map(|v| v.iter().map(|st| json!({"set": st.label(), "model": st.model, "stems": st.names})).collect::<Vec<_>>()),
                 })
             })
             .collect();
@@ -3063,5 +3129,16 @@ mod tests {
         assert_eq!(t.member_label(2), "X");
         assert_eq!(t.member_label(0), "Y");
         assert_eq!(t.member_label(1), "Z");
+    }
+
+    #[test]
+    fn stem_lanes_from_older_sessions_still_open() {
+        let old: StemView = serde_json::from_str(r#"{"member":1,"mode":true,"solo":[false,true,false,false],"mute":[false,false,false,true]}"#).unwrap();
+        assert_eq!(
+            (old.set.as_str(), old.solo.iter().map(String::as_str).collect::<Vec<_>>(), old.mute.iter().map(String::as_str).collect::<Vec<_>>()),
+            ("", vec!["bass"], vec!["vocals"])
+        );
+        let new = StemView { member: 0, mode: false, set: "htdemucs_6s".into(), solo: ["piano".to_owned()].into(), mute: BTreeSet::new() };
+        assert_eq!(serde_json::from_value::<StemView>(serde_json::to_value(&new).unwrap()).unwrap(), new);
     }
 }

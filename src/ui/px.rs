@@ -32,6 +32,20 @@ pub const GOOD: Color = lin(0.34670, 0.65141, 0.32314);
 pub const CLOSE: Color = lin(0.74540, 0.47932, 0.11697);
 pub const BAD: Color = lin(0.78354, 0.25415, 0.19462);
 
+/// A stem's own colour, so a lane, its tile share and the share page agree: the usual six, and
+/// silk for any other name.
+pub fn stem_color(name: &str) -> Color {
+    match name {
+        "drums" => lin(0.80695, 0.22697, 0.14413),
+        "bass" => lin(0.15896, 0.34191, 0.80695),
+        "guitar" => lin(0.47932, 0.58408, 0.10224),
+        "piano" => lin(0.10702, 0.57758, 0.45641),
+        "vocals" => lin(0.69387, 0.24228, 0.57758),
+        "other" => lin(0.36625, 0.36625, 0.40724),
+        _ => SILK,
+    }
+}
+
 pub const PIXEL: &str = "Geist Pixel";
 
 /// A colour in linear light (Rune's space), converted from the design's sRGB hex.

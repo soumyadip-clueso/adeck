@@ -43,8 +43,8 @@ pub struct Export {
     pub page: Value,
     /// (local file, name in the page). The page refers to each by name.
     pub files: Vec<(PathBuf, String)>,
-    /// Members' stems, four per track in order, named like `files`.
-    pub stems: Vec<(PathBuf, String)>,
+    /// Members' stems, one list per track (as many as its split has), named like `files`.
+    pub stems: Vec<Vec<(PathBuf, String)>>,
 }
 
 fn store() -> PathBuf {
@@ -98,11 +98,11 @@ pub fn publish(x: Export, cfg: &ShareCfg, aws: &str) -> Result<Share, String> {
             fill(&mut page, name, &facts);
         }
     }
-    // Stems, a track's four at a time, until the page carries `stems_mb` of them; the rest of
+    // Stems, a track's set at a time, until the page carries `stems_mb` of them; the rest of
     // the tracks go without.
     let mut stem_bytes = 0u64;
     let mut over = false;
-    for set in x.stems.chunks(4) {
+    for set in &x.stems {
         if !over {
             let mut made = Vec::new();
             for (src, name) in set {

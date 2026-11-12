@@ -409,6 +409,9 @@ textarea.noteIn:focus { border-color: var(--silk); }
 .low i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--f); background: var(--silk); }
 .low.loud b { color: var(--close-c); } .low.loud i::after { background: var(--close-c); }
 .low.voice { color: var(--bad); }
+.low .sbar { display: flex; width: 120px; height: 4px; border-radius: 1px; background: var(--grille); overflow: hidden; }
+.low .sbar i { display: block; height: 100%; }
+.lane .ln .sdot { display: inline-block; width: 6px; height: 6px; border-radius: 1px; margin-right: 5px; vertical-align: 1px; }
 .lanes { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--grille-on); border-radius: 4px; background: var(--screen); margin-bottom: 8px; }
 .tiles .lanes { margin-bottom: 0; }
 .lhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 28px; font: 400 11px/1 var(--pixel); text-transform: uppercase; letter-spacing: .06em; color: var(--faint-c); }
@@ -530,11 +533,18 @@ const trim = m => matchOn && m.lufs != null ? Math.min(4, Math.pow(10, (TARGET -
 const P = { g: null, active: 0, playing: false, at: 0, started: 0, nodes: [], once: false };
 // Stems: lanes open under the sound you hear (S.on), heard instead of the mix (S.mode), soloed
 // and muted. They play as more nodes on the same clock; only the gains move.
-const STEMS = ['drums', 'bass', 'other', 'vocals'];
+// A track carries whatever stems its split made (4, or 6 with guitar and piano), in adeck's
+// order; solo and mute go by name so they carry from one track to the next.
 const HAS_STEMS = D.groups.some(g => g.members.some(m => m.stems));
 const LOUD_BASS = 0.4;
-const S = { on: false, mode: true, solo: [false, false, false, false], mute: [false, false, false, false] };
-const stemGains = () => { const any = S.solo.some(Boolean); return STEMS.map((_, k) => (any ? S.solo[k] : !S.mute[k]) ? 1 : 0); };
+const STEM_COLOR = { drums: '#e8836a', bass: '#6f9ee8', guitar: '#b8c95a', piano: '#5cc8b4', vocals: '#d987c8', other: '#a3a3ab' };
+const stemColor = n => STEM_COLOR[n] || 'var(--silk)';
+const S = { on: false, mode: true, solo: new Set(), mute: new Set() };
+const stemOf = (m, n) => (m && m.stems || []).find(x => x.stem === n);
+const stemGains = () => {
+  const m = P.g != null && D.groups[P.g].members[P.active], names = (m && m.stems || []).map(x => x.stem), any = names.some(n => S.solo.has(n));
+  return names.map(n => (any ? S.solo.has(n) : !S.mute.has(n)) ? 1 : 0);
+};
 const heardStems = () => S.on && S.mode && P.g != null && !!(D.groups[P.g].members[P.active] || {}).stems;
 function gainOf(x) {
   const m = D.groups[P.g].members[x.i];
@@ -595,7 +605,7 @@ function toggleStems(gi, mi) {
   if (was) start(gi, now(), false);
 }
 function setStemMode(on) { S.mode = on; applyGains(); renderLanes(); }
-function stemPress(k, mute) { (mute ? S.mute : S.solo)[k] = !(mute ? S.mute : S.solo)[k]; S.mode = true; applyGains(); renderLanes(); }
+function stemPress(n, mute) { const set = mute ? S.mute : S.solo; set.has(n) ? set.delete(n) : set.add(n); S.mode = true; applyGains(); renderLanes(); }
 
 // Drag along a strip or the transport to move the playhead silently; it resumes on release.
 function scrubber(el, gi, span, frac) {
@@ -695,17 +705,33 @@ function paintLane(c) {
 }
 const laneSpan = (gi, m) => KIND === 'compare' ? len(D.groups[gi]) : (m.secs || len(D.groups[gi]));
 const pct = f => `${Math.round(f * 100)}%`;
+// Each stem's share of the loudness, stacked in its colour.
+function stemBar(m) {
+  const parts = (m.stems || []).filter(x => x.share != null);
+  if (!parts.length) return null;
+  const r = h('div', 'low'), bar = h('span', 'sbar');
+  r.title = `Each stem's share of the loudness${m.stem_model ? ` (${m.stem_model})` : ''}: ${parts.map(x => `${x.stem} ${pct(x.share)}`).join(', ')}`;
+  parts.forEach(x => { if (x.share > 0) { const p = h('i'); p.style.width = pct(x.share); p.style.background = stemColor(x.stem); bar.append(p); } });
+  r.append(document.createTextNode('Stems'), bar);
+  return r;
+}
 function lowEnd(m) {
-  const b = m.stems && m.stems[1] && m.stems[1].share; if (b == null) return null;
+  const all = document.createDocumentFragment(), sb = stemBar(m);
+  if (sb) all.append(sb);
+  const lo = bassLow(m); if (lo) all.append(lo);
+  return all.childNodes.length ? all : null;
+}
+function bassLow(m) {
+  const b = (stemOf(m, 'bass') || {}).share; if (b == null) return null;
   const r = h('div', `low${b >= LOUD_BASS ? ' loud' : ''}`); r.title = 'The bass stem’s share of the track’s loudness';
   const i = h('i'); i.style.setProperty('--f', pct(b)); r.append(document.createTextNode('Low end'), h('b', null, pct(b)), i);
   // Vocals are only a check: a generated bed shouldn't have any.
-  const v = m.stems[3] && m.stems[3].share;
+  const v = (stemOf(m, 'vocals') || {}).share;
   if (v != null && v >= 0.05) { const w = h('div', 'low voice', `Vocals stem ${pct(v)}`); w.title = 'Something in the vocals stem: a voice, or a lead the splitter took for one. Solo vocals to hear it.'; const f = document.createDocumentFragment(); f.append(r, w); return f; }
   return r;
 }
 function stemBtn(gi, mi) {
-  const b = h('button', 'sbtn', 'Stems'); b.type = 'button'; b.dataset.g = gi; b.dataset.m = mi; b.title = 'Drums, bass, other and vocals in lanes: solo, mute, A/B against the mix · T';
+  const b = h('button', 'sbtn', 'Stems'); b.type = 'button'; b.dataset.g = gi; b.dataset.m = mi; b.title = 'Its stems in lanes: solo, mute, A/B against the mix · T';
   b.addEventListener('click', e => { e.stopPropagation(); toggleStems(gi, mi); });
   b.addEventListener('keydown', e => e.stopPropagation());
   return b;
@@ -728,17 +754,18 @@ function renderLanes() {
   hd.append(document.createTextNode('Stems'), ab);
   if (m.stem_model) hd.append(h('span', 'model', m.stem_model));
   hd.append(h('span', 'sp'));
-  const bs = m.stems[1] && m.stems[1].share;
+  const bs = (stemOf(m, 'bass') || {}).share;
   if (bs != null) hd.append(h('span', `bass${bs >= LOUD_BASS ? ' loud' : ''}`, `Bass is ${pct(bs)} of the loudness`));
   const x = h('button', 'sbtn', 'Close'); x.type = 'button'; x.title = 'Close the lanes · T'; x.addEventListener('click', () => toggleStems(gi, P.active)); hd.append(x);
   el.append(hd);
   const gains = stemGains();
   m.stems.forEach((st, k) => {
-    const lane = h('div', `lane${heardStems() && gains[k] ? ' heard' : ''}`), li = h('div', 'li'), ln = h('div', 'ln', st.stem);
+    const lane = h('div', `lane${heardStems() && gains[k] ? ' heard' : ''}`), li = h('div', 'li'), ln = h('div', 'ln'), dot = h('i', 'sdot');
+    dot.style.background = stemColor(st.stem); ln.append(dot, document.createTextNode(st.stem));
     const sub = [st.lufs != null ? (st.lufs <= -69 ? 'silent' : `${st.lufs.toFixed(1)} LUFS`) : null, st.share != null ? pct(st.share) : null].filter(Boolean).join(' · ');
     if (sub) ln.append(h('small', null, sub));
-    const sb = h('button', `sm${S.solo[k] ? ' on' : ''}`, 'S'); sb.type = 'button'; sb.title = `Solo ${st.stem}`; sb.addEventListener('click', () => stemPress(k, false));
-    const mb = h('button', `sm${S.mute[k] ? ' on' : ''}`, 'M'); mb.type = 'button'; mb.title = `Mute ${st.stem}`; mb.addEventListener('click', () => stemPress(k, true));
+    const sb = h('button', `sm${S.solo.has(st.stem) ? ' on' : ''}`, 'S'); sb.type = 'button'; sb.title = `Solo ${st.stem}`; sb.addEventListener('click', () => stemPress(st.stem, false));
+    const mb = h('button', `sm${S.mute.has(st.stem) ? ' on' : ''}`, 'M'); mb.type = 'button'; mb.title = `Mute ${st.stem}`; mb.addEventListener('click', () => stemPress(st.stem, true));
     li.append(ln, sb, mb);
     const c = h('canvas', 'wave lanec'); c.dataset.k = k;
     if (st.src) scrubber(c, gi, () => laneSpan(gi, m));

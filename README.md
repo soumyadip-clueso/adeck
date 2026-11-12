@@ -27,7 +27,7 @@ Judging generated audio means listening, and listening means comparing: the new 
 - **Blind mode.** Names hide as X, Y, Z until you pick, and the pick records which was which.
 - **Waveform, spectrogram and metadata** for every file, with only the differences shown in a compare.
 - **Boards and pads** for reviewing many groups of sounds at once, with keep / drop / move-to on each file.
-- **Stems**: split a track into drums, bass, other and vocals (Demucs, on your Mac, once per track), then solo, mute and A/B them against the mix in lanes under the tile, with each track's low-end share on its tile.
+- **Stems**: split a track into drums, bass, other and vocals, or six with guitar and piano (Demucs or BS-RoFormer, on your Mac, once per track, deterministic), then solo, mute and A/B them against the mix in lanes under the tile, switch between a track's splits, and see each stem's share of the loudness on its tile.
 - **Runs and diffs**: browse a whole generation run as a table, or compare run A against run B per metric.
 - **Selections and loops**: shift-drag a stretch, Space plays just that, L loops it.
 - **Verdicts on disk**: every score, pick and note is a JSON line the agent can read or wait on.
@@ -90,7 +90,7 @@ Every view, control and shortcut is in **[docs/usage.md](docs/usage.md)**. Press
 | `open_diff` | Run A against run B, per group and metric |
 | `list_tabs`, `focus_tab`, `close_tab` | Manage tabs |
 | `annotate_tab` | Pin a note on what to listen for |
-| `play`, `stop`, `set_loop` | Play a tab, a group or a take from a time (or its stems, soloed); pause; loop a region |
+| `play`, `stop`, `set_loop` | Play a tab, a group or a take from a time (or its stems: soloed, muted, a chosen split, or the mix); pause; loop a region |
 | `split_stems` | Split a tab's tracks into stems in the background, once each |
 | `screenshot_tab` | A PNG of a tab as the user sees it |
 | `get_feedback`, `wait_for_feedback` | Scores, picks and notes; wait for the next one |

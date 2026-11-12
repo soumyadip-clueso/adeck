@@ -70,28 +70,50 @@ pub fn fixtures() -> PathBuf {
     dir
 }
 
-/// click-120 split as the splitter would: clicks on drums, a loud low sine on bass, a quiet
-/// chord on other, nothing on vocals.
+/// click-120 split twice, as the splitters would: four stems (clicks on drums, a loud low sine
+/// on bass, a quiet chord on other, nothing on vocals), and a six-stem set beside it that hears
+/// the chord's top as piano and a pluck as guitar.
 fn fixture_stems(dir: &Path) {
-    let d = crate::stems::dir_for(&dir.join("click-120.wav"));
-    if d.join("stems.json").is_file() {
-        return;
-    }
-    let _ = std::fs::create_dir_all(&d);
+    let track = dir.join("click-120.wav");
     let rate = 44_100u32;
     let tau = std::f32::consts::TAU;
-    write_wav(&d.join("drums.wav"), rate, 10.0, |t| {
+    let drums = |t: f32| {
         let beat = (t * 2.0).fract();
         if beat < 0.02 { (t * 1200.0 * tau).sin() * (1.0 - beat / 0.02) * 0.5 } else { 0.0 }
-    });
-    write_wav(&d.join("bass.wav"), rate, 10.0, |t| (t * 55.0 * tau).sin() * 0.55 * (0.6 + 0.4 * (t * tau / 2.0).cos().abs()));
-    write_wav(&d.join("other.wav"), rate, 10.0, |t| ((t * 440.0 * tau).sin() + (t * 554.0 * tau).sin() + (t * 659.0 * tau).sin()) * 0.05 * ((t * 0.5).fract() < 0.75) as u8 as f32);
-    write_wav(&d.join("vocals.wav"), rate, 10.0, |_| 0.0);
-    let levels = serde_json::json!({"mix_lufs": -14.2, "stems": {
-        "drums": {"lufs": -24.0, "share": 0.09}, "bass": {"lufs": -15.1, "share": 0.69},
-        "other": {"lufs": -20.4, "share": 0.21}, "vocals": {"lufs": -70.0, "share": 0.0}}});
-    let meta = serde_json::json!({"version": 1, "model": "htdemucs_ft", "source": "click-120.wav", "stems": crate::stems::NAMES, "levels": levels});
-    let _ = std::fs::write(d.join("stems.json"), serde_json::to_vec_pretty(&meta).unwrap_or_default());
+    };
+    let bass = |t: f32| (t * 55.0 * tau).sin() * 0.55 * (0.6 + 0.4 * (t * tau / 2.0).cos().abs());
+    let gate = |t: f32| ((t * 0.5).fract() < 0.75) as u8 as f32;
+    let d = crate::stems::dir_for(&track);
+    if !d.join("stems.json").is_file() {
+        let _ = std::fs::create_dir_all(&d);
+        write_wav(&d.join("drums.wav"), rate, 10.0, drums);
+        write_wav(&d.join("bass.wav"), rate, 10.0, bass);
+        write_wav(&d.join("other.wav"), rate, 10.0, |t| ((t * 440.0 * tau).sin() + (t * 554.0 * tau).sin() + (t * 659.0 * tau).sin()) * 0.05 * gate(t));
+        write_wav(&d.join("vocals.wav"), rate, 10.0, |_| 0.0);
+        let levels = serde_json::json!({"mix_lufs": -14.2, "stems": {
+            "drums": {"lufs": -24.0, "share": 0.09}, "bass": {"lufs": -15.1, "share": 0.69},
+            "other": {"lufs": -20.4, "share": 0.21}, "vocals": {"lufs": -70.0, "share": 0.0}}});
+        let meta = serde_json::json!({"version": 1, "model": "htdemucs_ft", "source": "click-120.wav", "stems": crate::stems::FOUR, "levels": levels});
+        let _ = std::fs::write(d.join("stems.json"), serde_json::to_vec_pretty(&meta).unwrap_or_default());
+    }
+    let d = d.with_file_name("click-120.stems-htdemucs_6s");
+    if !d.join("stems.json").is_file() {
+        let _ = std::fs::create_dir_all(&d);
+        write_wav(&d.join("drums.wav"), rate, 10.0, drums);
+        write_wav(&d.join("bass.wav"), rate, 10.0, bass);
+        write_wav(&d.join("guitar.wav"), rate, 10.0, |t| (t * 330.0 * tau).sin() * 0.08 * (-(t * 2.0).fract() * 6.0).exp());
+        write_wav(&d.join("piano.wav"), rate, 10.0, |t| ((t * 554.0 * tau).sin() + (t * 659.0 * tau).sin()) * 0.05 * gate(t));
+        write_wav(&d.join("other.wav"), rate, 10.0, |t| (t * 440.0 * tau).sin() * 0.03 * gate(t));
+        write_wav(&d.join("vocals.wav"), rate, 10.0, |_| 0.0);
+        // In the order this model writes them, not adeck's: the lanes sort them.
+        let names = ["bass", "drums", "other", "vocals", "guitar", "piano"];
+        let levels = serde_json::json!({"v": 2, "mix_lufs": -14.2, "stems": {
+            "drums": {"lufs": -24.0, "share": 0.09}, "bass": {"lufs": -15.1, "share": 0.66},
+            "guitar": {"lufs": -26.5, "share": 0.05}, "piano": {"lufs": -21.0, "share": 0.15},
+            "other": {"lufs": -27.9, "share": 0.05}, "vocals": {"lufs": -70.0, "share": 0.0}}});
+        let meta = serde_json::json!({"version": 1, "model": "htdemucs_6s.yaml", "source": "click-120.wav", "stems": names, "levels": levels});
+        let _ = std::fs::write(d.join("stems.json"), serde_json::to_vec_pretty(&meta).unwrap_or_default());
+    }
 }
 
 fn env(t: f32, secs: f32) -> f32 {
@@ -211,14 +233,15 @@ fn board(s: &mut App) {
     s.settle_now();
 }
 
-/// A board with the stem lanes open under a track, the bass soloed.
+/// A board with the stem lanes open under a track, its six-stem set picked, the piano soloed.
 fn stems(s: &mut App) {
     reset(s);
     let _ = s.call("open_board", &board_args());
     s.settle_now();
     s.toggle_stems("ui-click", 1);
     s.settle_now();
-    s.stem_press(1, false);
+    s.set_stem_set("htdemucs_6s");
+    s.stem_press("piano", false);
     s.settle_now();
 }
 
@@ -820,12 +843,33 @@ mod tests {
         let files = rt.state.open_stems(rt.state.current().unwrap()).unwrap().files.clone();
         assert!(files.iter().all(|p| rt.state.entry(&crate::app::stem_id(p)).is_some_and(|e| e.analysis.is_some())));
         // (The lanes sit below this window's fold, so these go through the app.)
-        rt.state.stem_press(1, false);
+        rt.state.stem_press("bass", false);
         rt.state.set_stem_mode(false);
         let t = rt.state.current().unwrap();
-        assert_eq!((t.stem_solo, t.stem_mode), ([false, true, false, false], false));
-        rt.state.stem_press(0, false);
+        assert_eq!((t.stem_solo.iter().map(String::as_str).collect::<Vec<_>>(), t.stem_mode), (vec!["bass"], false));
+        rt.state.stem_press("drums", false);
         assert!(rt.state.current().unwrap().stem_mode, "a solo puts you back on the stems");
+        // The track has a second, six-stem set: the header switches to it, solos carry by name.
+        for _ in 0..4 {
+            rt.frame(1.0 / 60.0);
+        }
+        assert!(has(&mut rt, "stem-set-main") && has(&mut rt, "stem-set-htdemucs_6s"));
+        rt.state.set_stem_set("htdemucs_6s");
+        rt.state.settle_now();
+        rt.invalidate();
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        let t = rt.state.current().unwrap();
+        let st = rt.state.open_stems(t).unwrap().clone();
+        assert_eq!((st.label(), st.names.len()), ("htdemucs_6s".to_owned(), 6));
+        assert_eq!(st.names, ["drums", "bass", "guitar", "piano", "vocals", "other"]);
+        assert_eq!(crate::stems::gains(&st.names, &t.stem_solo, &t.stem_mute), [1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(t.spec.stems.as_ref().map(|v| v.set.as_str()), Some("htdemucs_6s"), "the pick is kept with the tab");
+        assert!(st.files.iter().all(|p| rt.state.entry(&crate::app::stem_id(p)).is_some_and(|e| e.analysis.is_some())));
+        for k in ["lane-row-guitar", "lane-row-piano", "solo-piano"] {
+            assert!(has(&mut rt, k), "{k}");
+        }
         rt.on_key = Some(crate::ui::on_key);
         rt.key(rune::KeyEvent { key: rune::Key::Text("t".into()), mods: rune::Mods::default() });
         for _ in 0..10 {
