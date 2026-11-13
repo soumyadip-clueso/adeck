@@ -13,6 +13,7 @@ mod scenes;
 mod share;
 mod shot;
 mod source;
+mod stems;
 mod ui;
 
 use rune::{AppSpec, Chrome};
@@ -25,6 +26,22 @@ const FONTS: &[&[u8]] = &[include_bytes!("../assets/fonts/Geist.ttf"), include_b
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `adeck --refresh-shares [slug…]`: put published shares on this build's page, same links.
+    if let Some(i) = args.iter().position(|a| a == "--refresh-shares") {
+        let (cfg, _) = config::Config::load();
+        let only = &args[i + 1..];
+        let mut failed = false;
+        for sh in share::load().iter().filter(|s| !s.gone && (only.is_empty() || only.contains(&s.slug))) {
+            match share::refresh(sh, &cfg.share) {
+                Ok(n) => println!("{}: {n} of {} files redrawn · {}", sh.slug, sh.files, sh.url),
+                Err(e) => {
+                    failed = true;
+                    eprintln!("{}: {e}", sh.slug);
+                }
+            }
+        }
+        std::process::exit(i32::from(failed));
+    }
     if let Some(r) = dock::dump(&args) {
         if let Err(e) = r {
             eprintln!("adeck: {e}");
