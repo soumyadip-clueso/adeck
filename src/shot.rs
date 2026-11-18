@@ -7,11 +7,19 @@ use std::process::{Command, Stdio};
 
 use image::{GrayImage, ImageBuffer, Luma, Rgba, RgbaImage, imageops};
 
-/// Renders tab `tab` as the window shows it (the caller saves the session first).
-pub fn render(tab: u64, size: &str, theme: &str, scale: u32) -> Result<Vec<u8>, String> {
+/// Renders tab `tab` as the window shows it (the caller saves the session first), with the
+/// playhead at `at` seconds when the window's is somewhere, and playing when it is.
+pub fn render(tab: u64, size: &str, theme: &str, scale: u32, at: Option<f64>, playing: bool) -> Result<Vec<u8>, String> {
     let out = std::env::temp_dir().join(format!("adeck-shot-{}-{tab}-{scale}.png", std::process::id()));
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let run = Command::new(exe)
+    let mut cmd = Command::new(exe);
+    if let Some(at) = at {
+        cmd.env("ADECK_AT", format!("{at:.4}"));
+    }
+    if playing {
+        cmd.env("ADECK_PLAYING", "1");
+    }
+    let run = cmd
         .args(["--snap", &out.display().to_string(), "--size", size, "--scale", &scale.to_string(), "--theme", theme])
         .env("ADECK_FOCUS", tab.to_string())
         .env("ADECK_HEADLESS", "1")

@@ -27,6 +27,8 @@ Judging generated audio means listening, and listening means comparing: the new 
 - **Blind mode.** Names hide as X, Y, Z until you pick, and the pick records which was which.
 - **Waveform, spectrogram and metadata** for every file, with only the differences shown in a compare.
 - **Boards and pads** for reviewing many groups of sounds at once, with keep / drop / move-to on each file.
+- **Music against picture**: give a board group (or one take) a video and it plays frame-accurately on the mixer's clock, so A/B/C flips land on the same frame, at 1× or 2×, looped, scrubbed or blind. The video's own sound can stay out or ride under every take as a voice-over bed.
+- **Stems**: split a track into drums, bass, other and vocals, or six with guitar and piano (Demucs or BS-RoFormer, on your Mac, once per track, deterministic), then solo, mute and A/B them against the mix in lanes under the tile, switch between a track's splits, and see each stem's share of the loudness on its tile.
 - **Runs and diffs**: browse a whole generation run as a table, or compare run A against run B per metric.
 - **Selections and loops**: shift-drag a stretch, Space plays just that, L loops it.
 - **Verdicts on disk**: every score, pick and note is a JSON line the agent can read or wait on.
@@ -41,6 +43,10 @@ Judging generated audio means listening, and listening means comparing: the new 
   <tr>
     <td width="50%"><img src="docs/images/single.png" alt="One file: waveform, spectrogram and metadata"><br><sub><b>One file</b>: waveform, spectrogram, metadata, score 0–3</sub></td>
     <td width="50%"><img src="docs/images/diff.png" alt="Run A against run B"><br><sub><b>Diff</b>: run A against run B, per group and metric</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/video.png" alt="Takes judged against a video"><br><sub><b>Picture</b>: takes against a video, flips keep the frame</sub></td>
+    <td width="50%"></td>
   </tr>
 </table>
 
@@ -84,13 +90,14 @@ Every view, control and shortcut is in **[docs/usage.md](docs/usage.md)**. Press
 |---|---|
 | `list_runs`, `list_items`, `get_item` | Find runs and items; everything known about one item |
 | `open_single`, `open_compare`, `open_render`, `open_run` | Open a file, a compare, renders or a run; each returns a `tab_id` |
-| `open_board`, `board_upsert` | A board of groups; add or replace groups while it's open |
+| `open_board`, `board_upsert` | A board of groups; add or replace groups while it's open. A group or take can carry a `video` to judge against |
 | `open_pads` | Sound pads for one-shot effects |
 | `open_diff` | Run A against run B, per group and metric |
 | `list_tabs`, `focus_tab`, `close_tab` | Manage tabs |
 | `annotate_tab` | Pin a note on what to listen for |
-| `play`, `stop`, `set_loop` | Play a tab, a group or a take from a time; pause; loop a region |
-| `screenshot_tab` | A PNG of a tab as the user sees it |
+| `play`, `stop`, `set_loop` | Play a tab, a group or a take from a time, at 1× or 2× (or its stems: soloed, muted, a chosen split, or the mix); pause; loop a region |
+| `split_stems` | Split a tab's tracks into stems in the background, once each |
+| `screenshot_tab` | A PNG of a tab as the user sees it, at the window's playhead and video frame |
 | `get_feedback`, `wait_for_feedback` | Scores, picks and notes; wait for the next one |
 | `get_decisions` | The latest keep / drop / move on each file of a board |
 | `get_selection` | What the user pointed you at: the tab, take, selection or loop, and the playhead |
@@ -131,7 +138,7 @@ just screenshots
 
 `just hot` uses [Rune](https://github.com/anomalyco/rune)'s hot patching and needs Dioxus CLI 0.7.10 (`cargo install dioxus-cli@0.7.10 --locked`). A changed function body in `src/ui/` or `src/app.rs` patches into the window in about a second and keeps your tabs; anything else rebuilds and relaunches.
 
-Every screen renders headless from fixture audio adeck generates itself: `adeck --snap out.png --scene compare` (scenes: `single compare blind run board pads diff shared activity palette keys empty`). The screenshots above come from `just screenshots`.
+Every screen renders headless from fixture audio adeck generates itself: `adeck --snap out.png --scene compare` (scenes: `single compare blind run board pads diff shared activity palette keys stems video video-scrub video-blind empty`). The screenshots above come from `just screenshots`.
 
 Rune is pinned to one commit. `just bump-rune` moves it to the latest and runs the lints, tests and scenes.
 

@@ -43,6 +43,8 @@ pub enum JobKind {
     Fetch,
     /// earshot working on a file.
     Earshot,
+    /// Tracks being split into stems.
+    Stems,
 }
 
 impl JobKind {
@@ -51,6 +53,7 @@ impl JobKind {
         match self {
             JobKind::Fetch => "download",
             JobKind::Earshot => "earshot",
+            JobKind::Stems => "stem split",
         }
     }
 }

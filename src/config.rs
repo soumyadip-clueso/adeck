@@ -21,6 +21,24 @@ pub struct Config {
     pub aws: String,
     pub s3: S3,
     pub share: ShareCfg,
+    pub stems: StemsCfg,
+}
+
+/// Splitting tracks into stems (see `stems.rs`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct StemsCfg {
+    /// uv, which runs the splitter with its own Python. Empty: found in the usual places.
+    pub uv: String,
+    /// The Demucs model: htdemucs_ft (best, ~14 s a minute of audio on an M-series Mac) or
+    /// htdemucs (about twice as fast, a little worse).
+    pub model: String,
+}
+
+impl Default for StemsCfg {
+    fn default() -> Self {
+        StemsCfg { uv: String::new(), model: "htdemucs_ft".into() }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -48,6 +66,8 @@ pub struct ShareCfg {
     pub s3: ShareS3,
     /// Folders whose files are already public somewhere: the page links there instead of copying.
     pub links: Vec<ShareLink>,
+    /// The most stem audio one page carries, in MB; tracks past it are shared without stems.
+    pub stems_mb: u64,
 }
 
 /// A local folder and the URL that serves the same files, e.g. a CDN in front of the bucket
@@ -71,7 +91,7 @@ pub struct ShareS3 {
 
 impl Default for ShareCfg {
     fn default() -> Self {
-        ShareCfg { command: String::new(), prefix: "adeck-".into(), audio: "bundle".into(), s3: ShareS3::default(), links: Vec::new() }
+        ShareCfg { command: String::new(), prefix: "adeck-".into(), audio: "bundle".into(), s3: ShareS3::default(), links: Vec::new(), stems_mb: 160 }
     }
 }
 
@@ -83,7 +103,16 @@ impl ShareCfg {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { port: 7717, run_roots: Vec::new(), refs_dir: None, earshot: "earshot".into(), aws: "aws".into(), s3: S3::default(), share: ShareCfg::default() }
+        Config {
+            port: 7717,
+            run_roots: Vec::new(),
+            refs_dir: None,
+            earshot: "earshot".into(),
+            aws: "aws".into(),
+            s3: S3::default(),
+            share: ShareCfg::default(),
+            stems: StemsCfg::default(),
+        }
     }
 }
 
