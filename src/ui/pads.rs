@@ -101,7 +101,7 @@ fn pad(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32,
     let hidden = m < g.members.len() && t.group_hidden(&g.key);
     let e = s.entry(&mem.item);
     let active = focused && t.active == m;
-    let playing = active && s.mixer_is_for(t.id()) && s.mixer.is_playing();
+    let playing = active && s.playing(t.id());
     let label = t.board_label(g, m);
     // Every pad shows its key; it plays from the keyboard once its group is the focused one.
     let key_char = KEYS.chars().nth(pos).map(|ch| ch.to_ascii_uppercase().to_string());

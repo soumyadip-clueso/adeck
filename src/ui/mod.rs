@@ -531,6 +531,7 @@ fn board_key(s: &mut App, ev: &KeyEvent) -> bool {
                 'm' => s.toggle_loudness_match(),
                 't' => s.toggle_stems_active(),
                 'a' => s.toggle_stem_mode(),
+                'v' => s.toggle_video_audio(),
                 _ => return false,
             }
         }

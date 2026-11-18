@@ -51,6 +51,7 @@ const BOARD: Section = (
         ("Z", "Zoom to the sound"),
         ("T", "Stem lanes for the one you hear"),
         ("A", "Stems or the full mix"),
+        ("V", "The video's own sound under every take"),
         ("K D", "Keep or drop"),
         ("↵", "Pick"),
         ("Esc", "Hide or show the pane"),

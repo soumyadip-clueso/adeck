@@ -474,6 +474,15 @@ pub struct App {
     pub shares_checked: Option<Result<(), String>>,
     dirty: bool,
     pub headless: bool,
+    /// The video the focused board group is judged against, decoding on the mixer's clock.
+    pub picture: Option<crate::video::Picture>,
+    /// A video that couldn't be found, by id, so it isn't looked for again every frame.
+    pub picture_missing: Option<(String, String)>,
+    /// A headless shot of a window that was playing.
+    pub shot_playing: bool,
+    /// The board group last scrolled to for its picture, so focusing one brings its picture
+    /// into view once, not every frame.
+    picture_scrolled: Option<(u64, String)>,
 }
 
 impl App {
@@ -536,6 +545,10 @@ impl App {
             shares_checked: None,
             dirty: false,
             headless,
+            picture: None,
+            picture_missing: None,
+            shot_playing: headless && std::env::var_os("ADECK_PLAYING").is_some(),
+            picture_scrolled: None,
         };
         app.restore();
         if headless {
@@ -853,6 +866,106 @@ impl App {
         self.mixer.set_range_secs(selection);
         self.apply_trims();
         self.apply_mix();
+        self.sync_picture();
+    }
+
+    /// The video the front tab's focused group shows for the take you hear, if any.
+    pub fn wanted_video(&self) -> Option<(u64, crate::board::Video)> {
+        let t = self.current()?;
+        if t.board().is_none_or(Board::is_pads) {
+            return None;
+        }
+        Some((t.id(), t.focused()?.video_for(t.active)?.clone()))
+    }
+
+    /// The time the picture shows: the mixer's, when it's playing this tab (or in a headless
+    /// shot, where the mixer only holds the position it was given).
+    fn picture_secs(&self, tab: u64) -> f64 {
+        if self.headless || self.mixer_is_for(tab) { self.mixer.secs() } else { 0.0 }
+    }
+
+    /// Opens, swaps or drops the picture to match the focused take, puts the frame for the
+    /// mixer's time in it, and sets the video's sound as the bed when asked. True when the
+    /// picture changed.
+    pub fn sync_picture(&mut self) -> bool {
+        let want = self.wanted_video();
+        let Some((tab, v)) = want else {
+            let had = self.picture.take().is_some();
+            if self.mixer.bed.is_some() {
+                self.mixer.set_bed(None, 1.0);
+            }
+            return had;
+        };
+        let mut changed = false;
+        if self.picture.as_ref().is_none_or(|p| p.id != v.file) {
+            self.picture = None;
+            if self.picture_missing.as_ref().is_some_and(|(id, _)| *id == v.file) {
+                return false;
+            }
+            match self.find_video(&v.file) {
+                Ok(path) => {
+                    self.picture = Some(crate::video::Picture::open(v.file.clone(), path, self.waker.clone(), !self.headless));
+                    self.picture_missing = None;
+                }
+                Err(e) => {
+                    self.toast = Some((e.clone(), true));
+                    self.picture_missing = Some((v.file.clone(), e));
+                    return true;
+                }
+            }
+            changed = true;
+        }
+        if self.mixer_is_for(tab) {
+            let bed = self.picture.as_ref().filter(|_| v.audio == crate::board::VideoAudio::Bed).map(|p| p.path.clone());
+            let gain = 10f64.powf(v.gain_db.clamp(-60.0, 12.0) / 20.0) as f32;
+            self.mixer.set_bed(bed, gain);
+        }
+        let at = self.picture_secs(tab);
+        if let Some(p) = self.picture.as_mut() {
+            changed |= p.show(at);
+        }
+        changed
+    }
+
+    /// A video file by the same ids items take: a path (relative ones under a run root), `run:…`
+    /// or `s3://…`. Local paths only on the UI thread; the rest go through the resolver.
+    fn find_video(&self, id: &str) -> Result<PathBuf, String> {
+        let p = crate::config::expand(std::path::Path::new(id.trim()));
+        if p.is_file() {
+            return Ok(p.canonicalize().unwrap_or(p));
+        }
+        let item = crate::source::resolve(&self.cfg, id).map_err(|e| format!("No video: {e}"))?;
+        if item.media != Media::Video {
+            return Err(format!("{id} isn't a video."));
+        }
+        Ok(item.path)
+    }
+
+    /// Flips the picture's own sound between left out and played under every take (V). Changes
+    /// whichever video is in effect: the take's own, else the group's.
+    pub fn toggle_video_audio(&mut self) {
+        let Some(t) = self.current_mut() else { return };
+        let active = t.active;
+        let Some(key) = t.spec.group.clone() else { return };
+        let Some(g) = t.spec.board.as_mut().and_then(|b| b.groups.iter_mut().find(|g| g.key == key)) else { return };
+        let n = g.members.len();
+        let own = if active < n { g.members.get_mut(active) } else { g.more.get_mut(active - n) };
+        let v = match own.and_then(|m| m.video.as_mut()) {
+            Some(v) => v,
+            None => match g.video.as_mut() {
+                Some(v) => v,
+                None => return,
+            },
+        };
+        v.audio = match v.audio {
+            crate::board::VideoAudio::Mute => crate::board::VideoAudio::Bed,
+            crate::board::VideoAudio::Bed => crate::board::VideoAudio::Mute,
+        };
+        let on = v.audio == crate::board::VideoAudio::Bed;
+        self.dirty = true;
+        self.toast = Some((if on { "The video's own sound plays under every take." } else { "The video's own sound is off." }.into(), false));
+        self.sync_mixer();
+        self.sync_picture();
     }
 
     /// The stems of the board member you're hearing, while its lanes are open and they're on disk.
@@ -1075,6 +1188,11 @@ impl App {
 
     pub fn mixer_is_for(&self, tab: u64) -> bool {
         self.mixer.owner() == Some(tab)
+    }
+
+    /// Whether `tab` is playing, as drawn: a headless shot shows the window's state.
+    pub fn playing(&self, tab: u64) -> bool {
+        (self.mixer_is_for(tab) && self.mixer.is_playing()) || (self.headless && self.shot_playing)
     }
 
     pub fn toggle_play(&mut self) {
@@ -1604,6 +1722,8 @@ impl App {
             out["groups"] = json!(b.groups.len());
         }
         self.dirty = true;
+        // A video that wasn't there may be now.
+        self.picture_missing = None;
         self.refresh_board(tab);
         self.load_tab(tab);
         Ok(out)
@@ -2113,12 +2233,14 @@ impl App {
             return;
         }
         let (tab, label) = (t.id(), crate::ui::tab_title(self, t));
+        let at = self.mixer_is_for(tab).then(|| self.mixer.secs());
+        let playing = self.playing(tab);
         let (w, h, dark) = self.win.get();
         self.save();
         self.shooting = true;
         let (tx, waker) = (self.tx.clone(), self.waker.clone());
         std::thread::spawn(move || {
-            let result = crate::shot::render(tab, &format!("{}x{}", w.round(), h.round()), if dark { "dark" } else { "light" }, 2)
+            let result = crate::shot::render(tab, &format!("{}x{}", w.round(), h.round()), if dark { "dark" } else { "light" }, 2, at, playing)
                 .and_then(|png| crate::shot::frame(&png, dark, 2))
                 .and_then(|png| crate::shot::keep(&png, &label));
             let _ = tx.send(Event::Shot { result });
@@ -2208,6 +2330,16 @@ impl App {
             }
             self.calls = Some(rx);
         }
+        changed |= self.sync_picture();
+        // A group with a picture coming into focus (a click, arrows, the agent): show its card.
+        let focus = self.current().and_then(|t| Some((t.id(), t.focused()?.key.clone()))).filter(|_| self.wanted_video().is_some());
+        if focus.is_some() && focus != self.picture_scrolled {
+            if let Some((_, key)) = &focus {
+                tx.scroll_into_view(format!("group-{key}"));
+            }
+            changed = true;
+        }
+        self.picture_scrolled = focus;
         if self.mixer.is_playing() || self.mixer.is_loading() {
             self.sync_videos(false);
             self.follow_playhead();
@@ -2502,6 +2634,13 @@ impl App {
         for _ in 0..4 {
             self.drain();
         }
+        if self.headless {
+            self.sync_picture();
+            let at = self.current().map_or(0.0, |t| self.picture_secs(t.id()));
+            if let Some(p) = self.picture.as_mut() {
+                p.show_now(at, std::time::Duration::from_secs(10));
+            }
+        }
     }
 
     /// `settle`, for scenes and tests.
@@ -2623,6 +2762,13 @@ impl App {
             self.load_tab(id);
         }
         self.active = focus.or_else(|| v["active"].as_u64()).filter(|a| self.tab(*a).is_some()).or_else(|| self.tabs.first().map(Tab::id));
+        // A headless shot of a tab mid-play: the window's playhead, so the picture and the
+        // strips show where the user is.
+        if self.headless
+            && let Some(at) = std::env::var("ADECK_AT").ok().and_then(|s| s.parse::<f64>().ok())
+        {
+            self.mixer.seek_secs(at);
+        }
     }
 
     // Tools: what the MCP server asks for, answered on the UI thread.
@@ -2785,6 +2931,9 @@ impl App {
                 if let Some(at) = a.get("at_s").and_then(Value::as_f64) {
                     self.seek_secs(at);
                 }
+                if let Some(x) = a.get("speed").and_then(Value::as_f64) {
+                    self.mixer.set_speed(if x > 1.0 { 2.0 } else { 1.0 });
+                }
                 // Stems: open the lanes of the member playing, soloing any named.
                 let (solo, mute) = (ids("solo"), ids("mute"));
                 let hear = a.get("hear").and_then(Value::as_str);
@@ -2821,7 +2970,9 @@ impl App {
                     let st = self.open_stems(t);
                     json!({"loaded": self.stems_loaded(t), "on_disk": st.is_some(), "set": st.map(crate::stems::Stems::label), "names": st.map(|s| &s.names)})
                 });
-                Ok(json!({ "playing": true, "tab_id": id, "loading": self.mixer.is_loading(), "stems": stems }))
+                Ok(
+                    json!({ "playing": true, "tab_id": id, "loading": self.mixer.is_loading(), "speed": self.mixer.speed, "stems": stems, "video": self.tab(id).map(|t| self.video_json(t)) }),
+                )
             }
             "split_stems" => {
                 let id = tab_arg().or(self.active).ok_or("No tab is open.")?;
@@ -2901,7 +3052,9 @@ impl App {
             }
             "_save" => {
                 self.save();
-                Ok(json!({ "active": self.active }))
+                let tab = a.get("tab_id").and_then(Value::as_u64).or(self.active);
+                let at = tab.filter(|t| self.mixer_is_for(*t)).map(|_| self.mixer.secs());
+                Ok(json!({ "active": self.active, "at": at, "playing": tab.is_some_and(|t| self.playing(t)) }))
             }
             other => Err(format!("No tool {other}.")),
         }
@@ -2976,6 +3129,30 @@ impl App {
                 "decided": b.items().iter().filter(|i| self.decisions.contains_key(*i)).count(),
             })),
             "diff": t.spec.diff.as_ref().map(|d| json!({ "a": d.a, "b": d.b, "rows": d.rows.len() })),
+            "video": self.video_json(t),
+        })
+    }
+
+    /// The focused group's picture: which file, the frame showing against the mixer's, and what
+    /// its sound is doing.
+    fn video_json(&self, t: &Tab) -> Value {
+        let Some(v) = t.focused().filter(|_| t.board().is_some_and(|b| !b.is_pads())).and_then(|g| g.video_for(t.active)) else { return Value::Null };
+        let p = self.picture.as_ref().filter(|p| p.id == v.file && self.active == Some(t.id()));
+        let info = p.and_then(crate::video::Picture::info);
+        let at = self.picture_secs(t.id());
+        json!({
+            "file": v.file,
+            "audio": v.audio,
+            "gain_db": v.gain_db,
+            "fps": info.as_ref().map(crate::video::Info::fps),
+            "frames": info.as_ref().map(|i| i.frames),
+            "has_audio": info.as_ref().map(|i| i.audio),
+            "frame": p.and_then(|p| p.shown),
+            "frame_at_playhead": info.as_ref().map(|i| i.frame_at(at)),
+            "frame_wanted": p.and_then(|p| p.wanted),
+            "bed_ready": self.mixer_is_for(t.id()) && self.mixer.bed_ready(),
+            "proxy": p.map(|p| format!("{:?}", p.proxy()).to_lowercase()),
+            "error": self.picture_missing.as_ref().filter(|(id, _)| *id == v.file).map(|(_, e)| e.clone()).or_else(|| p.and_then(crate::video::Picture::error)).or_else(|| self.mixer.bed_error.clone()),
         })
     }
 }

@@ -5,6 +5,9 @@
 //! same moment with no gap. Each member has a trim (the loudness match). The callback owns its
 //! state; the UI sends it commands over a channel and reads the position from an atomic.
 //!
+//! A bed can ride under whichever member you hear: a video's own sound (a voice-over), on the
+//! same cursor, at its own level, untouched by switching and by the loudness match.
+//!
 //! The device opens on a worker the first time something plays, never at launch, and never in a
 //! headless run.
 
@@ -25,6 +28,7 @@ const GRAIN: f32 = 0.04;
 type Paths = Vec<(String, std::path::PathBuf)>;
 type Decoded = Result<(Vec<Arc<Vec<f32>>>, u64), String>;
 type Opened = Result<(Sender<Cmd>, u32), String>;
+type Bed = Result<Arc<Vec<f32>>, String>;
 
 enum Cmd {
     Load {
@@ -43,6 +47,9 @@ enum Cmd {
     Range(Option<(u64, u64)>),
     Volume(f32),
     Speed(f32),
+    /// The bed under every member, or none.
+    Bed(Option<Arc<Vec<f32>>>),
+    BedGain(f32),
 }
 
 struct Shared {
@@ -111,6 +118,16 @@ pub struct Mixer {
     lost: bool,
     /// The last callback count seen and when it changed.
     last_beat: (u64, std::time::Instant),
+    /// The bed: which file is wanted, its length once decoded, the decode in flight, and a
+    /// decode waiting for the device's rate.
+    pub bed: Option<std::path::PathBuf>,
+    bed_frames: u64,
+    bed_decoding: Option<(std::path::PathBuf, Receiver<Bed>)>,
+    bed_pending: bool,
+    pub bed_gain: f32,
+    pub bed_error: Option<String>,
+    /// The longest member, in frames (`frames` is the longer of it and the bed).
+    track_frames: u64,
 }
 
 impl Default for Mixer {
@@ -148,6 +165,13 @@ impl Default for Mixer {
             stream_dead: None,
             lost: false,
             last_beat: (0, std::time::Instant::now()),
+            bed: None,
+            bed_frames: 0,
+            bed_decoding: None,
+            bed_pending: false,
+            bed_gain: 1.0,
+            bed_error: None,
+            track_frames: 0,
         }
     }
 }
@@ -229,6 +253,7 @@ impl Mixer {
         self.want_play = false;
         self.pending_seek = None;
         self.frames = 0;
+        self.track_frames = 0;
         self.active = 0;
         self.mix = None;
         self.loop_frames = None;
@@ -274,8 +299,54 @@ impl Mixer {
         self.decoding = Some((set, rx));
     }
 
+    /// The bed is decoded and riding under the members.
+    pub fn bed_ready(&self) -> bool {
+        self.bed.is_some() && self.bed_frames > 0
+    }
+
     pub fn is_loading(&self) -> bool {
         self.decoding.is_some() || self.pending.is_some()
+    }
+
+    /// Plays `path`'s sound under every member at `gain` (linear), or no bed with `None`. The same
+    /// file again only moves the level.
+    pub fn set_bed(&mut self, path: Option<std::path::PathBuf>, gain: f32) {
+        if (gain - self.bed_gain).abs() > f32::EPSILON {
+            self.bed_gain = gain;
+            self.send(Cmd::BedGain(gain));
+        }
+        if self.bed == path {
+            return;
+        }
+        self.bed.clone_from(&path);
+        self.bed_decoding = None;
+        self.bed_pending = false;
+        self.bed_error = None;
+        self.bed_frames = 0;
+        self.frames = self.track_frames;
+        self.send(Cmd::Bed(None));
+        if path.is_some() {
+            if self.tx.is_some() {
+                self.start_bed();
+            } else {
+                self.bed_pending = true;
+                self.open();
+            }
+        }
+    }
+
+    fn start_bed(&mut self) {
+        let Some(path) = self.bed.clone() else { return };
+        let (tx, rx) = channel();
+        let (waker, rate, p) = (self.waker.clone(), self.rate, path.clone());
+        std::thread::spawn(move || {
+            let r = decode::decode(&p).map(|pcm| Arc::new(decode::resample(&pcm, rate).samples)).map_err(|e| format!("{}: {e}", p.display()));
+            let _ = tx.send(r);
+            if let Some(w) = &waker {
+                w();
+            }
+        });
+        self.bed_decoding = Some((path, rx));
     }
 
     pub fn owner(&self) -> Option<u64> {
@@ -410,6 +481,9 @@ impl Mixer {
                     if let Some((set, paths)) = self.pending.take() {
                         self.start_decode(set, paths);
                     }
+                    if std::mem::take(&mut self.bed_pending) {
+                        self.start_bed();
+                    }
                 }
                 Err(e) => self.error = Some(format!("Couldn't open the audio output: {e}")),
             }
@@ -422,7 +496,8 @@ impl Mixer {
             changed = true;
             match r {
                 Ok((tracks, longest)) => {
-                    self.frames = longest;
+                    self.track_frames = longest;
+                    self.frames = longest.max(self.bed_frames);
                     self.error = None;
                     self.send(Cmd::Load { set, tracks });
                     self.send(Cmd::Active(self.active));
@@ -438,6 +513,23 @@ impl Mixer {
                     self.error = Some(format!("Couldn't load: {e}"));
                     self.loaded = None;
                 }
+            }
+        }
+        if let Some((p, rx)) = &self.bed_decoding
+            && let Ok(r) = rx.try_recv()
+        {
+            let current = self.bed.as_ref() == Some(p);
+            self.bed_decoding = None;
+            changed = true;
+            match r {
+                Ok(samples) if current => {
+                    self.bed_frames = (samples.len() / 2) as u64;
+                    self.frames = self.track_frames.max(self.bed_frames);
+                    self.send(Cmd::BedGain(self.bed_gain));
+                    self.send(Cmd::Bed(Some(samples)));
+                }
+                Ok(_) => {}
+                Err(e) => self.bed_error = Some(format!("Couldn't load the video's sound: {e}")),
             }
         }
         if self.shared.ended.swap(false, Ordering::AcqRel) {
@@ -492,8 +584,14 @@ impl Mixer {
         self.pause();
         self.loaded = None;
         self.frames = 0;
+        self.track_frames = 0;
         self.decoding = None;
         self.pending = None;
+        // A new output starts with no bed: the next sync asks for it again.
+        self.bed = None;
+        self.bed_frames = 0;
+        self.bed_decoding = None;
+        self.bed_pending = false;
     }
 }
 
@@ -505,6 +603,12 @@ struct State {
     active: usize,
     pos: u64,
     len: u64,
+    /// The longest member, so a bed coming or going can recompute `len`.
+    track_len: u64,
+    bed: Option<Arc<Vec<f32>>>,
+    bed_gain: f32,
+    /// The bed's level now, moving to `bed_gain` over the crossfade.
+    bed_g: f32,
     playing: bool,
     looping: Option<(u64, u64)>,
     range: Option<(u64, u64)>,
@@ -539,6 +643,10 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
         active: 0,
         pos: 0,
         len: 0,
+        track_len: 0,
+        bed: None,
+        bed_gain: 1.0,
+        bed_g: 0.0,
         playing: false,
         looping: None,
         range: None,
@@ -562,7 +670,8 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
         while let Ok(c) = rx.try_recv() {
             match c {
                 Cmd::Load { set, tracks } => {
-                    s.len = tracks.iter().map(|t| (t.len() / 2) as u64).max().unwrap_or(0);
+                    s.track_len = tracks.iter().map(|t| (t.len() / 2) as u64).max().unwrap_or(0);
+                    s.len = s.track_len.max(s.bed.as_ref().map_or(0, |b| (b.len() / 2) as u64));
                     s.gains = (0..tracks.len()).map(|i| if i == s.active { 1.0 } else { 0.0 }).collect();
                     s.trims.resize(tracks.len(), 1.0);
                     s.tracks = tracks;
@@ -583,6 +692,12 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                 Cmd::Loop(l) => s.looping = l,
                 Cmd::Range(r) => s.range = r,
                 Cmd::Volume(v) => s.volume = v,
+                Cmd::Bed(b) => {
+                    s.len = s.track_len.max(b.as_ref().map_or(0, |b| (b.len() / 2) as u64));
+                    s.bed = b;
+                    s.bed_g = 0.0;
+                }
+                Cmd::BedGain(g) => s.bed_gain = g,
                 Cmd::Speed(v) => {
                     s.speed = v;
                     s.frac = 0.0;
@@ -620,6 +735,16 @@ fn start_stream(shared: Arc<Shared>, dead: Arc<AtomicBool>) -> Result<(cpal::Str
                         r += b * g * trim * w;
                     }
                 }
+            }
+            if let Some(bed) = &s.bed {
+                let g = s.bed_g + (s.bed_gain - s.bed_g).clamp(-step, step);
+                for &(p, w) in &taps[..nt] {
+                    if let (Some(a), Some(b)) = (bed.get(p * 2), bed.get(p * 2 + 1)) {
+                        l += a * g * w;
+                        r += b * g * w;
+                    }
+                }
+                s.bed_g = g;
             }
             let m = s.master * s.volume;
             loudest = loudest.max((l * m).abs()).max((r * m).abs());
@@ -803,6 +928,10 @@ mod tests {
             active: 0,
             pos: 0,
             len: 1_000_000,
+            track_len: 1_000_000,
+            bed: None,
+            bed_gain: 1.0,
+            bed_g: 0.0,
             playing: true,
             looping: None,
             range: None,

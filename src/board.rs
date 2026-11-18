@@ -38,6 +38,55 @@ pub struct Member {
     /// adeck runs earshot itself.
     #[serde(default)]
     pub measure: Option<Value>,
+    /// A picture for this take alone; without one it shows the group's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<Video>,
+}
+
+/// What a picture's own sound does: left out, or played under every take (a voice-over bed).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoAudio {
+    #[default]
+    Mute,
+    #[serde(alias = "mix", alias = "vo")]
+    Bed,
+}
+
+/// A video the takes are judged against. It plays on the mixer's clock, so flipping takes
+/// lands at the same frame. Given as a bare path or as `{file, audio, gain_db}`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(from = "VideoIn")]
+pub struct Video {
+    /// A path (absolute, or relative to a run root), `run:…` or `s3://…`.
+    pub file: String,
+    #[serde(default)]
+    pub audio: VideoAudio,
+    /// The bed's level, in dB. The bed is never loudness-matched.
+    #[serde(default)]
+    pub gain_db: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum VideoIn {
+    File(String),
+    Full {
+        file: String,
+        #[serde(default)]
+        audio: VideoAudio,
+        #[serde(default)]
+        gain_db: f64,
+    },
+}
+
+impl From<VideoIn> for Video {
+    fn from(v: VideoIn) -> Video {
+        match v {
+            VideoIn::File(file) => Video { file, audio: VideoAudio::Mute, gain_db: 0.0 },
+            VideoIn::Full { file, audio, gain_db } => Video { file, audio, gain_db },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -62,11 +111,18 @@ pub struct Group {
     pub more: Vec<Member>,
     #[serde(default)]
     pub note: Option<String>,
+    /// The picture every take in the group is judged against (a member's own wins).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<Video>,
 }
 
 impl Group {
     pub fn title(&self) -> &str {
         self.title.as_deref().unwrap_or(&self.key)
+    }
+    /// The picture for the member at `idx` in mixer order: its own, else the group's.
+    pub fn video_for(&self, idx: usize) -> Option<&Video> {
+        self.playable().get(idx).and_then(|m| m.video.as_ref()).or(self.video.as_ref())
     }
     /// Every member that plays, in mixer order: the members, then the rest.
     pub fn playable(&self) -> Vec<&Member> {
@@ -318,6 +374,23 @@ mod tests {
         assert_eq!((t[1].0, t[1].1), (1, 1));
         assert_eq!((t[2].0, t[2].1), (0, 0));
         assert!((t[0].2.unwrap() - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_video_is_a_path_or_an_object_and_a_member_s_own_wins() {
+        let g: Group = serde_json::from_value(json!({
+            "key": "launch", "video": "cut.mp4",
+            "members": [{"item": "a.wav"}, {"item": "b.wav", "video": {"file": "alt.mp4", "audio": "bed", "gain_db": -3}}]
+        }))
+        .unwrap();
+        assert_eq!(g.video_for(0).map(|v| (v.file.as_str(), v.audio)), Some(("cut.mp4", VideoAudio::Mute)));
+        let v = g.video_for(1).unwrap();
+        assert_eq!((v.file.as_str(), v.audio, v.gain_db), ("alt.mp4", VideoAudio::Bed, -3.0));
+        // It saves as the object and reads back the same.
+        let back: Group = serde_json::from_value(serde_json::to_value(&g).unwrap()).unwrap();
+        assert_eq!(back, g);
+        let vo: Video = serde_json::from_value(json!({"file": "x.mp4", "audio": "vo"})).unwrap();
+        assert_eq!(vo.audio, VideoAudio::Bed);
     }
 
     #[test]

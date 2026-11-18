@@ -132,6 +132,9 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
     if let Some(ch) = g.chip.as_ref().filter(|_| !hidden && tight) {
         card = card.child(row().child(chip(ch, k)));
     }
+    if on && let Some(st) = stage(s, t, g, width - 28.0) {
+        card = card.child(st);
+    }
 
     // The tiles, wrapped to the width; the stem lanes open under the row of the one you hear.
     let order = t.group_order(g);
@@ -158,6 +161,82 @@ fn group_card(s: &App, t: &Tab, g: &Group, on: bool, width: f32, k: &Kit) -> El 
     card
 }
 
+/// The picture the group is judged against, on the mixer's clock, with where in it you are and
+/// what its own sound is doing. Beside it on a wide card, above its facts on a narrow one.
+fn stage(s: &App, t: &Tab, g: &Group, width: f32) -> Option<El> {
+    let v = g.video_for(t.active)?;
+    let missing = s.picture_missing.as_ref().filter(|(id, _)| *id == v.file).map(|(_, e)| e.clone());
+    let p = s.picture.as_ref().filter(|p| p.id == v.file);
+    let info = p.and_then(|p| p.info());
+    let err = missing.or_else(|| p.and_then(|p| p.error()));
+    let side_w = 188.0;
+    let wide = width >= 620.0;
+    let aspect = info.as_ref().map_or(16.0 / 9.0, |i| i.width as f32 / i.height.max(1) as f32);
+    let room = if wide { width - side_w - 16.0 } else { width };
+    let mut pw = room.min(820.0);
+    let mut ph = pw / aspect;
+    if ph > 440.0 {
+        ph = 440.0;
+        pw = ph * aspect;
+    }
+    let mut pic = el().key(format!("picture-{}", g.key)).w(pw).h(ph).radius(4.0).fill(Color::BLACK).clip_rounded(4.0).border(1.0, px::LINE);
+    match (p, &err) {
+        (_, Some(e)) => pic = pic.child(col().w_full().h_full().center().px(16.0).child(text(e.clone()).font(rune::TextStyle::new(12.0, 400.0)).color(px::BAD).wrap())),
+        (Some(p), None) if p.shown.is_some() => pic = pic.pixels_fit(&p.pixels, rune::SurfaceFit::Fit),
+        _ => pic = pic.child(col().w_full().h_full().center().child(text("LOADING PICTURE…").font(px::pixel(11.0)).color(px::FAINT))),
+    }
+
+    let name = std::path::Path::new(&v.file).file_name().and_then(|n| n.to_str()).unwrap_or(&v.file).to_owned();
+    let line = |k: &str, val: String| {
+        row().gap(8.0).child(text(k.to_owned()).font(px::pixel(10.0)).color(px::FAINT).w(54.0)).child(text(val).font(px::pixel(12.0)).color(px::SILK).truncate().shrink())
+    };
+    let mut side = col().gap(8.0).min_w(0.0);
+    if wide {
+        side = side.w(side_w);
+    }
+    side = side.child(text("PICTURE").font(px::pixel(10.0)).color(px::FAINT)).child(text(name.to_uppercase()).font(px::pixel(12.0)).color(px::SOFT).truncate());
+    if let (Some(i), Some(p)) = (&info, p) {
+        let f = p.shown.unwrap_or(0);
+        side = side
+            .child(line("FRAME", format!("{} / {}", f + 1, i.frames)))
+            .child(line("AT", crate::ui::widgets::clock(i.secs_of(f))))
+            .child(line("SIZE", format!("{}×{}", i.width, i.height)))
+            .child(line("RATE", format!("{} FPS", trim_fps(i.fps()))));
+        let proxy = match p.proxy() {
+            crate::video::ProxyState::Building => Some("BUILDING SCRUB PROXY…"),
+            crate::video::ProxyState::Failed => Some("NO PROXY · SCRUBS SLOWER"),
+            _ => None,
+        };
+        if let Some(pr) = proxy {
+            side = side.child(text(pr).font(px::pixel(10.0)).color(px::FAINT));
+        }
+        if i.audio {
+            let bed = v.audio == crate::board::VideoAudio::Bed;
+            let label = if bed { format!("VO BED {:+.0} DB", v.gain_db) } else { "VO BED".into() };
+            side = side.child(
+                px::toggle(&label, bed)
+                    .key(format!("bed-{}", g.key))
+                    .help("Play the video's own sound (a voice-over) under every take, at the same level for each · V")
+                    .on_press(|s: &mut App| s.toggle_video_audio()),
+            );
+            if let Some(e) = s.mixer.bed_error.as_ref().filter(|_| bed) {
+                side = side.child(text(e.clone()).font(rune::TextStyle::new(11.0, 400.0)).color(px::BAD).wrap());
+            }
+        } else {
+            side = side.child(text("NO SOUND IN THE VIDEO").font(px::pixel(10.0)).color(px::FAINT));
+        }
+    }
+    Some(if wide {
+        row().key(format!("stage-{}", g.key)).w_full().gap(16.0).child(pic).child(side)
+    } else {
+        col().key(format!("stage-{}", g.key)).w_full().gap(10.0).child(pic).child(side)
+    })
+}
+
+fn trim_fps(f: f64) -> String {
+    if (f - f.round()).abs() < 0.005 { format!("{}", f.round() as u64) } else { format!("{f:.2}") }
+}
+
 /// One member: click anywhere on it to play it.
 #[allow(clippy::too_many_arguments)]
 fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32, k: &Kit) -> El {
@@ -165,7 +244,7 @@ fn tile(s: &App, t: &Tab, g: &Group, m: usize, focused: bool, pos: usize, w: f32
     let hidden = t.group_hidden(&g.key);
     let e = s.entry(&mem.item);
     let active = focused && t.active == m;
-    let playing = active && s.mixer_is_for(t.id()) && s.mixer.is_playing();
+    let playing = active && s.playing(t.id());
     let label = t.board_label(g, m);
     let mut top = row().gap(6.0).center_y();
     if pos < 9 {

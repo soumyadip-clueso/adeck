@@ -15,6 +15,7 @@ mod shot;
 mod source;
 mod stems;
 mod ui;
+mod video;
 
 use rune::{AppSpec, Chrome};
 

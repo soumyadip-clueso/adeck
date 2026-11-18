@@ -32,7 +32,8 @@ compare (synced playback, instant switching, loudness-matched by default, option
 videos, open_run for a whole run as a table. Item ids are absolute paths, run:<run>/<path>, ref:<path> (the \
 local-only reference pack) or s3:// URLs; list_runs and list_items find them. Pin what to listen for with \
 annotate_tab. The user scores (0-3), picks and writes notes in the window; read them with get_feedback, or block \
-until they've judged with wait_for_feedback. screenshot_tab shows you what they see.";
+until they've judged with wait_for_feedback. screenshot_tab shows you what they see. To judge music against picture, give a board group a video: \
+every take plays in sync with it and flips keep the frame.";
 
 /// What the agent is up to, for the Dock icon: when it last called a tool, and how many calls are
 /// blocked waiting on the user's verdict.
@@ -246,16 +247,17 @@ fn wait_for_feedback(args: &Value, ctx: &Ctx) -> Result<Value, String> {
 
 /// Renders a tab as the window would, in a headless copy of adeck reading the same session.
 fn screenshot(args: &Value, ctx: &Ctx) -> Result<Vec<u8>, String> {
-    let saved = ctx.ui("_save", json!({}))?;
+    let saved = ctx.ui("_save", json!({ "tab_id": args.get("tab_id") }))?;
     let tab = args.get("tab_id").and_then(Value::as_u64).or_else(|| saved["active"].as_u64()).ok_or("No tab is open.")?;
+    let (at, playing) = (saved["at"].as_f64(), saved["playing"].as_bool().unwrap_or(false));
     let size = args.get("size").and_then(Value::as_str).unwrap_or("1280x800").to_owned();
     let theme = args.get("theme").and_then(Value::as_str).unwrap_or("dark");
     if args.get("pretty").and_then(Value::as_bool).unwrap_or(false) {
-        let png = crate::shot::frame(&crate::shot::render(tab, &size, theme, 2)?, theme == "dark", 2)?;
+        let png = crate::shot::frame(&crate::shot::render(tab, &size, theme, 2, at, playing)?, theme == "dark", 2)?;
         crate::shot::keep(&png, &format!("tab {tab}"))?;
         return Ok(png);
     }
-    crate::shot::render(tab, &size, theme, 1)
+    crate::shot::render(tab, &size, theme, 1, at, playing)
 }
 
 /// Publishes a tab as a page, on this thread (it uploads), and records it in the app.
@@ -306,13 +308,21 @@ fn metrics() -> Value {
 
 fn board_groups() -> Value {
     let chip = json!({"type": "object", "properties": {"text": {"type": "string"}, "tone": {"type": "string", "enum": ["good", "close", "bad", "other"]}}});
+    let video = json!({
+        "description": "A picture to judge the music against (mp4, mov, m4v): a path, or {file, audio, gain_db}. It plays frame-accurately on the mixer's clock above the group's tiles, so switching takes keeps the frame, at 1x and 2x, in loops and in blind mode. audio: \"mute\" (default) leaves the video's own sound out; \"bed\" plays it under every take (a voice-over), at gain_db, never loudness-matched. The user flips it with V.",
+        "anyOf": [
+            {"type": "string"},
+            {"type": "object", "properties": {"file": {"type": "string"}, "audio": {"type": "string", "enum": ["mute", "bed"]}, "gain_db": {"type": "number"}}, "required": ["file"]}
+        ]
+    });
     let member = json!({"type": "object", "properties": {
         "item": {"type": "string", "description": "Item id."},
         "role": {"type": "string", "description": "pick | before | ref | anything."},
         "label": {"type": "string"},
         "numbers": {"type": "object", "description": "Your scores, shown in this order: {\"vibe\": 1.05, \"shape\": 0.51}."},
         "chip": chip,
-        "meta": {"type": "object", "description": "prompt, model, seed, chain… shown under Details."}
+        "meta": {"type": "object", "description": "prompt, model, seed, chain… shown under Details."},
+        "video": {"description": "This take's own picture, overriding the group's (shape as the group's video). Different pictures per take give blind mode away."}
     }, "required": ["item"]});
     json!({"type": "array", "items": {"type": "object", "properties": {
         "key": {"type": "string"},
@@ -322,7 +332,8 @@ fn board_groups() -> Value {
         "chip": chip,
         "members": {"type": "array", "items": member},
         "more": {"type": "array", "items": member, "description": "The rest, best first, folded."},
-        "note": {"type": "string"}
+        "note": {"type": "string"},
+        "video": video
     }, "required": ["key"]}})
 }
 
@@ -451,8 +462,8 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "play",
-            "Play a tab (the front one by default), optionally a board group, a member (index into the group's members then its rest) and a start time. On a board, stems: true opens that member's stem lanes and plays the stems (splitting it first if need be); solo names the stems to hear alone, e.g. [\"bass\"] (whatever the track's stems.json lists: drums, bass, other, vocals, and guitar and piano in a 6-stem split); mute names stems to leave out; hear: \"mix\" plays the full mix with the lanes open (the A/B), \"stems\" the stems; stem_set picks one of the track's splits when it has more than one, by model or folder suffix, e.g. \"htdemucs_6s\" (list_tabs shows them).",
-            json!({"tab_id": tab, "group": {"type": "string"}, "member": {"type": "integer"}, "at_s": {"type": "number"}, "stems": {"type": "boolean"}, "solo": {"type": "array", "items": {"type": "string"}}, "mute": {"type": "array", "items": {"type": "string"}}, "hear": {"type": "string", "enum": ["mix", "stems"]}, "stem_set": {"type": "string"}}),
+            "Play a tab (the front one by default), optionally a board group, a member (index into the group's members then its rest), a start time and a speed. Switching member while playing keeps the position (and the video's frame). On a board, stems: true opens that member's stem lanes and plays the stems (splitting it first if need be); solo names the stems to hear alone, e.g. [\"bass\"] (whatever the track's stems.json lists: drums, bass, other, vocals, and guitar and piano in a 6-stem split); mute names stems to leave out; hear: \"mix\" plays the full mix with the lanes open (the A/B), \"stems\" the stems; stem_set picks one of the track's splits when it has more than one, by model or folder suffix, e.g. \"htdemucs_6s\" (list_tabs shows them).",
+            json!({"tab_id": tab, "group": {"type": "string"}, "member": {"type": "integer"}, "at_s": {"type": "number"}, "speed": {"type": "number", "enum": [1, 2], "description": "Playback speed, pitch kept; the video follows."}, "stems": {"type": "boolean"}, "solo": {"type": "array", "items": {"type": "string"}}, "mute": {"type": "array", "items": {"type": "string"}}, "hear": {"type": "string", "enum": ["mix", "stems"]}, "stem_set": {"type": "string"}}),
             &[],
         ),
         tool(
@@ -465,7 +476,7 @@ pub fn tools() -> Vec<Value> {
         tool("set_loop", "Loop a region of a tab. Omit start_s/end_s to clear.", json!({"tab_id": tab, "start_s": {"type": "number"}, "end_s": {"type": "number"}}), &[]),
         tool(
             "screenshot_tab",
-            "A PNG of a tab as the user sees it.",
+            "A PNG of a tab as the user sees it, at the window's playhead (a board's video shows that frame).",
             json!({"tab_id": tab, "size": {"type": "string", "description": "WxH in points, default 1280x800."}, "theme": {"type": "string", "enum": ["dark", "light"]}, "pretty": {"type": "boolean", "description": "Framed at 2x on a backdrop for sharing; also saved to ~/Pictures/adeck and copied."}}),
             &[],
         ),

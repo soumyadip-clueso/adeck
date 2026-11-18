@@ -151,7 +151,7 @@ fn lane(s: &App, t: &Tab, m: usize, pos: usize, strip_w: f32, lane_h: f32, narro
     let wave = wave.opacity_motion(rune::Spring::SNAPPY);
     // Its key: a hardware pad, lit white for the take you hear (amber edge while it sounds),
     // with the number key that switches to it under it.
-    let playing = on && s.mixer_is_for(t.id()) && s.mixer.is_playing();
+    let playing = on && s.playing(t.id());
     let cap = row()
         .size(38.0, 38.0)
         .center()

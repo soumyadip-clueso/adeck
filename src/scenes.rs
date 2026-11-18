@@ -25,7 +25,30 @@ pub const ALL: &[Scene] = &[
     ("board-search", board_search),
     ("keys", keys),
     ("stems", stems),
+    ("video", video),
+    ("video-scrub", video_scrub),
+    ("video-blind", video_blind),
 ];
+
+/// A 10 s test card at 12 fps with ffmpeg's frame counter on it and a 330 Hz tone for its sound,
+/// keyframes 10 s apart so seeks decode from far back. Beside the run root, not in it, so runs
+/// list as before. `None` without ffmpeg.
+pub fn fixture_video() -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("adeck-fixtures-video");
+    let out = dir.join("picture.mp4");
+    if out.is_file() {
+        return Some(out);
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = dir.join(format!("picture-{}.mp4", std::process::id()));
+    let ok = std::process::Command::new(crate::video::tool("ffmpeg"))
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=10", "-f", "lavfi", "-i", "sine=frequency=330:duration=10"])
+        .args(["-c:v", "libx264", "-g", "120", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
+        .arg(&tmp)
+        .status()
+        .is_ok_and(|s| s.success());
+    (ok && std::fs::rename(&tmp, &out).is_ok()).then_some(out)
+}
 
 /// A folder of fixture files, written once per process.
 pub fn fixtures() -> PathBuf {
@@ -227,6 +250,45 @@ pub fn board_args() -> serde_json::Value {
     })
 }
 
+/// A board of three takes against a picture, its own sound as a bed under them.
+pub fn video_args() -> serde_json::Value {
+    let [a, b, c] = <[String; 3]>::try_from(ids(&["tone-a", "tone-b", "click-120"])).unwrap_or_default();
+    let film = fixture_video().map_or_else(String::new, |p| p.display().to_string());
+    serde_json::json!({
+        "label": "Music vs picture",
+        "choices": ["keep", "drop"],
+        "groups": [
+            {"key": "launch", "title": "Launch film", "subtitle": "10 s cut, voice-over", "video": {"file": film, "audio": "bed", "gain_db": -6},
+             "members": [{"item": a, "label": "Take 1"}, {"item": b, "label": "Take 2"}, {"item": c, "label": "Take 3"}]}
+        ]
+    })
+}
+
+fn video(s: &mut App) {
+    reset(s);
+    let _ = s.call("open_board", &video_args());
+    s.seek_secs(2.5);
+    s.settle_now();
+}
+
+/// Mid-drag across the strip: the picture follows the pointer.
+fn video_scrub(s: &mut App) {
+    reset(s);
+    let _ = s.call("open_board", &video_args());
+    s.scrub(1.0, rune::Phase::Down);
+    s.scrub(6.25, rune::Phase::Move);
+    s.settle_now();
+}
+
+fn video_blind(s: &mut App) {
+    reset(s);
+    let mut a = video_args();
+    a["blind"] = serde_json::Value::Bool(true);
+    let _ = s.call("open_board", &a);
+    s.seek_secs(4.0);
+    s.settle_now();
+}
+
 fn board(s: &mut App) {
     reset(s);
     let _ = s.call("open_board", &board_args());
@@ -357,6 +419,55 @@ mod tests {
             rt.frame(1.0 / 60.0);
         }
         rt
+    }
+
+    #[test]
+    fn dragging_the_scrubber_puts_that_frame_in_the_picture() {
+        if fixture_video().is_none() {
+            return;
+        }
+        let mut rt = rt(video);
+        let at = |rt: &Runtime<App>| rt.state.mixer.secs();
+        let info = rt.state.picture.as_ref().and_then(crate::video::Picture::info).expect("the picture opened");
+        assert_eq!((info.frames, info.rate), (120, (12, 1)));
+        assert_eq!(rt.state.picture.as_ref().and_then(|p| p.shown), Some(30), "2.5 s at 12 fps");
+        assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some("picture-launch")), "no picture on the card");
+
+        let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("scrubber")).expect("scrubber").target;
+        let y = r[1] + r[3] / 2.0;
+        // Down near the end, then back (behind everything decoded), then forward again.
+        for (i, frac) in [0.9f32, 0.15, 0.55].into_iter().enumerate() {
+            let x = r[0] + r[2] * frac;
+            if i == 0 {
+                rt.pointer_down(x, y)
+            } else {
+                rt.pointer_move(x, y)
+            }
+            rt.frame(1.0 / 60.0);
+            let secs = at(&rt);
+            let p = rt.state.picture.as_mut().expect("picture");
+            p.show_now(secs, std::time::Duration::from_secs(10));
+            assert_eq!(p.shown, Some(info.frame_at(secs)), "at {secs:.3} s");
+        }
+        rt.pointer_up(r[0] + r[2] * 0.55, y);
+    }
+
+    #[test]
+    fn a_take_s_own_video_wins_and_a_group_without_one_shows_none() {
+        if fixture_video().is_none() {
+            return;
+        }
+        let mut rt = rt(video);
+        assert!(rt.state.wanted_video().is_some());
+        // The bed setting is the board's: V flips it and it's saved.
+        rt.state.toggle_video_audio();
+        let g = rt.state.current().and_then(|t| t.focused()).unwrap();
+        assert_eq!(g.video.as_ref().map(|v| v.audio), Some(crate::board::VideoAudio::Mute));
+        let _ = rt.state.call("open_board", &board_args());
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.wanted_video().is_none());
+        assert!(!rt.state.sync_picture() || rt.state.picture.is_none());
+        assert!(rt.state.picture.is_none(), "a board without a video keeps no picture");
     }
 
     #[test]

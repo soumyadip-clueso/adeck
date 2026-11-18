@@ -127,9 +127,10 @@ pub fn clock(secs: f64) -> String {
     format!("{}:{:04.1}", m as u64, s - m * 60.0)
 }
 
-/// Where the playhead is drawn for a tab: the mixer's position if it's playing this tab, else 0.
+/// Where the playhead is drawn for a tab: the mixer's position if it's playing this tab, else 0
+/// (a headless shot's mixer holds the window's position, or 0).
 pub fn playhead(s: &App, tab: &Tab) -> f64 {
-    if s.mixer_is_for(tab.id()) { s.mixer.secs() } else { 0.0 }
+    if s.mixer_is_for(tab.id()) || s.headless { s.mixer.secs() } else { 0.0 }
 }
 
 /// What a strip is drawn against: the longest member, so a short member ends early on a shared

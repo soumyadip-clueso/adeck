@@ -27,12 +27,12 @@ snap SCENE OUT="target/snaps":
 
 # Every scene, into target/snaps/.
 snaps:
-    for s in empty single compare blind run board pads diff shared activity palette keys stems; do just snap $s; done
+    for s in empty single compare blind run board pads diff shared activity palette keys stems video video-scrub video-blind; do just snap $s; done
 
 # The README's screenshots, at 2x, into docs/images/.
 screenshots:
     mkdir -p docs/images
-    for s in compare board pads single diff; do ADECK_HOME=target/snap-home ADECK_CACHE=target/snap-cache cargo run -q -- --snap docs/images/$s.png --scene $s --size 1280x800 --scale 2; done
+    for s in compare board pads single diff video; do ADECK_HOME=target/snap-home ADECK_CACHE=target/snap-cache cargo run -q -- --snap docs/images/$s.png --scene $s --size 1280x800 --scale 2; done
 
 # Move rune to the tip of its default branch (or a given commit), then lint, test and snap: just bump-rune [sha]
 bump-rune *SHA:

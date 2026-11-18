@@ -19,7 +19,7 @@ pub fn has_player(t: &Tab) -> bool {
 pub fn build(s: &App, t: &Tab, width: f32, k: &Kit) -> El {
     // Under ~1100 points the bar drops its labels and the volume, so the scrubber keeps room.
     let compact = width < 1100.0;
-    let playing = s.mixer_is_for(t.id()) && s.mixer.is_playing();
+    let playing = s.playing(t.id());
     let play = row()
         .key("play")
         .size(40.0, 40.0)

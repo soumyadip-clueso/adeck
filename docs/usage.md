@@ -28,6 +28,7 @@ Tabs come back when you reopen adeck. **+** after the tabs (⌘T) opens a file (
 | **Render** | The video in sync with its audio, earshot's scorecard, and every cut marked by whether it got a hit, some sound, or silence. Several renders switch like a compare. |
 | **Run** | Every item of a run as a sortable, filterable table. Show what you haven't scored, open one, or compare a selection. |
 | **Board** | One card per group (a category, say), sorted by what the agent says matters, each a row of tiles: the picks, the raw "before" and the references, with the agent's numbers and a verdict chip. Click a tile to play it. The group in focus opens in the pane: the take zoomed to its sound, what made it, keep / drop / move-to, and the rest of the takes, ranked. The agent adds or replaces groups while it's open. |
+| **Board with a picture** | A group (or one take) with a `video` shows it above its tiles, decoded frame by frame on the transport's clock: switching takes keeps the frame, 2× runs the picture at 2×, loops and scrubs move it with the playhead, and blind mode hides only the takes. See [Music against picture](#music-against-picture). |
 | **Pads** | For one-shot effects. Each file is a big button: click it or press its key and it plays from the top, cutting off the last one. Score and keep or drop right on the pad. |
 | **Diff** | Run A against run B, one row per group and one column per metric, each change coloured by which way is better. A row naming a file from each side opens them as a compare. |
 | **Shared** | Every page you've shared, with Open, Copy link and Take down. |
@@ -41,6 +42,23 @@ Tabs come back when you reopen adeck. **+** after the tabs (⌘T) opens a file (
 - **Download**: the arrow at a board tile's top right saves a copy of the file (Downloads to start with). It hides while a group is blind.
 - **Zoom**: − and + (or = and −) zoom around the playhead, F fits the file or the loop, [ and ] pan. A zoomed view follows the playhead while it plays.
 - **Volume**: drag across the bars in the player.
+
+## Music against picture
+
+A board group can carry a video, for judging music (or effects) against the cut they're for. The agent passes it to `open_board` or `board_upsert`, on the group or on a single take (a take's own wins):
+
+```json
+{"key": "launch", "title": "Launch film",
+ "video": {"file": "/path/to/cut.mp4", "audio": "bed", "gain_db": -3},
+ "members": [{"item": "/path/to/take-a.wav"}, {"item": "/path/to/take-b.wav"}]}
+```
+
+`video` is a path (absolute, relative to a run root, `run:…` or `s3://…`) or that object. Without `audio` (or with `"mute"`) only the take is heard; `"bed"` plays the video's own sound under every take at `gain_db`, never loudness-matched, so a voice-over sits the same under each. V flips it.
+
+- **In sync by construction**: the frame on screen is always the one at the transport's position, picked every frame from the audio clock, so nothing drifts and 2× needs nothing special. The card shows which frame (of how many) and its time.
+- **Decoding**: ffmpeg, from the PATH or Homebrew's. Seeks start on exactly the frame asked for. On first open adeck also caches a proxy (at most 1280×720, a keyframe every 8 frames) beside the analysis cache, because exports often put keyframes seconds apart and a scrub would decode hundreds of frames; until it's ready the original plays and scrubs more slowly.
+- **Screenshots**: `screenshot_tab` renders at the window's playhead, so the agent sees the frame the user is looking at.
+- `list_tabs` reports the picture: the file, its frame rate and length, the frame showing against the frame at the playhead, whether the bed is loaded, and the proxy's state.
 
 ## Stems
 
@@ -165,6 +183,7 @@ Press `?` in the app for this list.
 | L | Loop the selection, or what the strip shows |
 | Z | Zoom to the sound or the whole file |
 | K / D | Keep / drop |
+| V | The video's own sound under every take, or not |
 | ↵ | Pick |
 | Esc | Clear the loop, or hide the pane |
 
